@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/assets/banner.svg" alt="Codex Provider: your ChatGPT account inside JetBrains AI Assistant" width="960">
-</p>
-
 <h1 align="center">Codex Provider</h1>
 
 <p align="center">
