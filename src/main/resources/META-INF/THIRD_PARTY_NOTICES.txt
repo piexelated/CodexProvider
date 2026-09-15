@@ -1,0 +1,5 @@
+This plugin downloads the official OpenAI Codex runtime selected by the user.
+Source and license notices: https://github.com/openai/codex
+Distribution: https://github.com/openai/codex/releases
+Codex declares the Apache-2.0 license. Its bundled components
+remain subject to their respective licenses and notices.

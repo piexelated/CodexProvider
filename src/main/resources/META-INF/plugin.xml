@@ -1,0 +1,16 @@
+<idea-plugin>
+    <id>dev.piexel.codex.subscription</id>
+    <name>Codex Provider</name>
+    <vendor>piexel</vendor>
+    <description><![CDATA[
+        Adds a Codex provider to JetBrains AI Assistant. Sign in with
+        ChatGPT and use the official local Codex runtime for supported text features.
+        No API key or local HTTP proxy is required. The matching native runtime is downloaded from the official Codex releases.
+    ]]></description>
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.ml.llm</depends>
+    <extensions defaultExtensionNs="com.intellij.ml.llm">
+        <thirdPartyAIProvider implementation="dev.piexel.codex.CodexProvider"/>
+        <preferableModelProvider implementation="dev.piexel.codex.CodexFeatureModelPreference"/>
+    </extensions>
+</idea-plugin>
