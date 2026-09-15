@@ -58,12 +58,25 @@ jobs:
         shell: bash
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
-          if [[ ! "$tag_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-            echo "Release tags must use vX.Y or vX.Y.Z, received: $GITHUB_REF_NAME" >&2
+          if [[ ! "$tag_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-dev)?$ ]]; then
+            echo "Release tags must use vX.Y, vX.Y.Z, vX.Y-dev, or vX.Y.Z-dev, received: $GITHUB_REF_NAME" >&2
             exit 1
           fi
+
+          normalize_numeric_version() {
+            local version="$1"
+            local major minor patch extra
+            IFS=. read -r major minor patch extra <<< "$version"
+            if [[ -z "$major" || -z "$minor" || -n "$extra" ]]; then
+              return 1
+            fi
+            printf '%s.%s.%s\n' "$major" "$minor" "${patch:-0}"
+          }
+
           project_version="$(./gradlew properties --console=plain -q | grep '^version:' | cut -d' ' -f2-)"
-          if [[ "$tag_version" != "$project_version" ]]; then
+          tag_numeric_version="$(normalize_numeric_version "${tag_version%-dev}")"
+          project_numeric_version="$(normalize_numeric_version "${project_version%-dev}")"
+          if [[ "$tag_numeric_version" != "$project_numeric_version" ]]; then
             echo "Tag $GITHUB_REF_NAME does not match project version $project_version." >&2
             exit 1
           fi
@@ -74,8 +87,14 @@ jobs:
       - name: Create checksum
         shell: bash
         run: |
-          cd build/distributions
-          sha256sum CodexProvider-*.zip > CodexProvider-${GITHUB_REF_NAME#v}.zip.sha256
+          shopt -s nullglob
+          archives=(build/distributions/CodexProvider-*.zip)
+          if (( ${#archives[@]} != 1 )); then
+            echo "Expected exactly one CodexProvider ZIP, found ${#archives[@]}." >&2
+            exit 1
+          fi
+          archive="${archives[0]}"
+          sha256sum "$archive" > "$archive.sha256"
 
       - name: Publish release
         env:
@@ -83,10 +102,18 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          archive="build/distributions/CodexProvider-$version.zip"
+          shopt -s nullglob
+          archives=(build/distributions/CodexProvider-*.zip)
+          if (( ${#archives[@]} != 1 )); then
+            echo "Expected exactly one CodexProvider ZIP, found ${#archives[@]}." >&2
+            exit 1
+          fi
+          archive="${archives[0]}"
+          release_options=(--verify-tag --generate-notes --title "Codex Provider $version")
+          if [[ "$version" == *-dev ]]; then
+            release_options+=(--prerelease)
+          fi
           gh release create "$GITHUB_REF_NAME" \
             "$archive" \
             "$archive.sha256" \
-            --verify-tag \
-            --generate-notes \
-            --title "Codex Provider $version"
+            "${release_options[@]}"
