@@ -93,7 +93,8 @@ class CodexProvider : ThirdPartyAIProvider {
 }
 
 private class CodexProfile(private val model: CodexModel) : AiaThirdPartyProfileInfo(
-    ThirdPartyLLMProfileId(CodexProvider.ID, model.id), AiaLlmProviderType.OpenAI,
+    // OpenAI and Anthropic are treated as BYOK providers and are excluded from non-chat prompts.
+    ThirdPartyLLMProfileId(CodexProvider.ID, model.id), codexProfileProviderType(),
 ) {
     override val modelName get() = model.name
     // JetBrains filters non-chat actions through known profile IDs. This is the
@@ -104,3 +105,5 @@ private class CodexProfile(private val model: CodexModel) : AiaThirdPartyProfile
     override fun supportsSystemMessage() = true
     override fun supportsContentType(type: ContentType) = type.toString().equals("text", ignoreCase = true)
 }
+
+internal fun codexProfileProviderType(): AiaLlmProviderType = AiaLlmProviderType.Unknown

@@ -102,6 +102,7 @@ tasks.register<JavaExec>("protocolTest") {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     classpath(files(protocolRuntimeLibraries))
+    classpath(aiAssistantPath.map { file("$it/lib/modules/intellij.ml.llm.core.jar") })
     mainClass = "dev.piexel.codex.ProtocolTestKt"
     enableAssertions = true
     systemProperty("codex.trace.disabled", "true")

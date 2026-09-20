@@ -63,6 +63,9 @@ class CodexFeatureModelPreference : PreferableModelProvider {
         val codexProfile = profileId as? ThirdPartyLLMProfileId ?: return false
         if (codexProfile.providerId != CodexProvider.ID) return false
         val feature = CodexFeatures.forPrompt(promptId.id) ?: return false
-        return CodexSettings.instance.featureModel(feature.id) == codexProfile.profileId
+        return matchesFeatureModel(CodexSettings.instance.featureModel(feature.id), codexProfile.profileId)
     }
 }
+
+internal fun matchesFeatureModel(configuredModelId: String?, candidateModelId: String): Boolean =
+    configuredModelId == null || configuredModelId == candidateModelId

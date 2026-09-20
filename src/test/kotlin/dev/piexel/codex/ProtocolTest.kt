@@ -1,6 +1,7 @@
 package dev.piexel.codex
 
 import com.google.gson.JsonParser
+import com.intellij.ml.llm.core.providers.AiaLlmProviderType
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.*
 import java.net.InetSocketAddress
@@ -52,6 +53,15 @@ fun main() = runBlocking {
         check(CodexFeatures.forPrompt("ij.fast.chat.title-generation")?.default == CodexFeatureDefault.INSTANT)
         check(CodexFeatures.all.filterNot { it.id == "chat_helpers" }.all { it.default == CodexFeatureDefault.CORE })
         check(CodexFeatures.all.flatMap { it.promptIds }.distinct().size == CodexFeatures.all.sumOf { it.promptIds.size })
+    }
+    verify("unassigned feature models keep Codex models available") {
+        check(matchesFeatureModel(null, "codex-model-a"))
+        check(matchesFeatureModel(null, "codex-model-b"))
+        check(matchesFeatureModel("codex-model-b", "codex-model-b"))
+        check(!matchesFeatureModel("codex-model-b", "codex-model-a"))
+    }
+    verify("subscription profiles are not classified as BYOK OpenAI") {
+        check(codexProfileProviderType() == AiaLlmProviderType.Unknown)
     }
     verify("repeated account refreshes do not publish model-setting changes") {
         val catalog = CodexModelCatalog()
