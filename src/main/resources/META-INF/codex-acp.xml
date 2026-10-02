@@ -1,0 +1,7 @@
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <projectService serviceInterface="com.intellij.ml.llm.agents.acp.api.AcpProcessLauncher"
+                        serviceImplementation="dev.piexel.codex.jetbrains.CodexAcpProcessLauncher"
+                        overrides="true"/>
+    </extensions>
+</idea-plugin>

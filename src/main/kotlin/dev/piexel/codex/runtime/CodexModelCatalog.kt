@@ -1,4 +1,6 @@
-package dev.piexel.codex
+package dev.piexel.codex.runtime
+
+import dev.piexel.codex.protocol.CodexModel
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart

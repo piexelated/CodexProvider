@@ -1,4 +1,4 @@
-package dev.piexel.codex
+package dev.piexel.codex.install
 
 import com.google.gson.JsonParser
 import java.io.BufferedInputStream
@@ -14,6 +14,14 @@ import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.time.Duration
 import java.util.zip.GZIPInputStream
+
+private const val CODEX_USER_AGENT = "Codex-Subscription-JetBrains"
+private const val USER_AGENT_HEADER = "User-Agent"
+private const val LATEST_POINTER_FILE = ".latest"
+private const val INSTALL_COMPLETION_MARKER_FILE = ".complete"
+private const val CODEX_RELEASE_TAG_PREFIX = "rust-v"
+private const val GITHUB_TAG_REF_PREFIX = "refs/tags/"
+private const val TRUNCATED_ARCHIVE_ERROR = "The Codex release archive is truncated."
 
 internal data class InstalledCodex(val version: String, val executable: Path, val isLatest: Boolean = false)
 
@@ -40,10 +48,10 @@ internal class CodexRuntimeInstaller(
     fun latestVersion(): String = findRelease(LATEST).version
 
     fun availableVersions(): List<String> {
-        val request = HttpRequest.newBuilder(releasesApi.resolve("../git/matching-refs/tags/rust-v"))
+        val request = HttpRequest.newBuilder(releasesApi.resolve("../git/matching-refs/tags/$CODEX_RELEASE_TAG_PREFIX"))
             .timeout(Duration.ofSeconds(30))
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "Codex-Subscription-JetBrains")
+            .header(USER_AGENT_HEADER, CODEX_USER_AGENT)
             .GET()
             .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
@@ -53,8 +61,9 @@ internal class CodexRuntimeInstaller(
         return JsonParser.parseString(response.body()).asJsonArray
             .mapNotNull { tag ->
                 val ref = tag.asJsonObject.get("ref")?.asString.orEmpty()
-                if (!ref.startsWith(VERSION_TAG_PREFIX)) null
-                else runCatching { normalizeVersion(ref.removePrefix(VERSION_TAG_PREFIX)) }
+                val tagPrefix = GITHUB_TAG_REF_PREFIX + CODEX_RELEASE_TAG_PREFIX
+                if (!ref.startsWith(tagPrefix)) null
+                else runCatching { normalizeVersion(ref.removePrefix(tagPrefix)) }
                     .getOrNull()
                     ?.takeUnless { '-' in it }
             }
@@ -67,21 +76,21 @@ internal class CodexRuntimeInstaller(
             .take(VERSION_MENU_LIMIT)
     }
 
-    fun install(selection: String): InstalledCodex {
+    fun install(selection: String, rememberLatest: Boolean = true): InstalledCodex {
         val requested = normalizeSelection(selection)
         if (requested != LATEST) cached(requested)?.let { return it }
         val release = try {
             findRelease(requested)
         } catch (error: Exception) {
             if (requested == LATEST) {
-                baseDirectory.resolve(".latest").readStringOrNull()?.trim()?.let(::cached)?.let { return it }
+                baseDirectory.resolve(LATEST_POINTER_FILE).readStringOrNull()?.trim()?.let(::cached)?.let { return it }
             }
             throw error
         }
         val installDirectory = baseDirectory.resolve("runtime-${release.version}")
         val executable = installDirectory.resolve("bin").resolve(target.installedExecutableName)
-        if (isUsableExecutable(executable) && installDirectory.resolve(".complete").readStringOrNull() == completionMarker(release.version)) {
-            if (requested == LATEST) Files.writeString(baseDirectory.resolve(".latest"), release.version)
+        if (isUsableExecutable(executable) && installDirectory.resolve(INSTALL_COMPLETION_MARKER_FILE).readStringOrNull() == completionMarker(release.version)) {
+            if (requested == LATEST && rememberLatest) rememberLatestVersion(release.version)
             return InstalledCodex(release.version, executable, requested == LATEST)
         }
 
@@ -92,25 +101,32 @@ internal class CodexRuntimeInstaller(
             val stagedExecutable = staging.resolve("bin").resolve(target.installedExecutableName)
             download(release, archive)
             extractExecutable(archive, stagedExecutable)
-            Files.writeString(staging.resolve(".complete"), completionMarker(release.version))
+            Files.writeString(staging.resolve(INSTALL_COMPLETION_MARKER_FILE), completionMarker(release.version))
             if (Files.exists(installDirectory)) installDirectory.toFile().deleteRecursively()
             try {
                 Files.move(staging, installDirectory, StandardCopyOption.ATOMIC_MOVE)
             } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
                 Files.move(staging, installDirectory)
             }
-            if (requested == LATEST) Files.writeString(baseDirectory.resolve(".latest"), release.version)
+            if (requested == LATEST && rememberLatest) rememberLatestVersion(release.version)
             return InstalledCodex(release.version, installDirectory.resolve("bin").resolve(target.installedExecutableName), requested == LATEST)
         } finally {
             staging.toFile().deleteRecursively()
         }
     }
 
+    /** The IDE advances its offline fallback only after the candidate session has been validated. */
+    fun rememberLatestVersion(version: String) {
+        val normalized = normalizeVersion(version)
+        check(cached(normalized) != null) { "Cannot select an incomplete Codex installation." }
+        Files.writeString(baseDirectory.resolve(LATEST_POINTER_FILE), normalized)
+    }
+
     private fun cached(version: String): InstalledCodex? {
         val normalized = runCatching { normalizeVersion(version) }.getOrNull() ?: return null
         val installDirectory = baseDirectory.resolve("runtime-$normalized")
         val executable = installDirectory.resolve("bin").resolve(target.installedExecutableName)
-        return if (isUsableExecutable(executable) && installDirectory.resolve(".complete").readStringOrNull() == completionMarker(normalized)) {
+        return if (isUsableExecutable(executable) && installDirectory.resolve(INSTALL_COMPLETION_MARKER_FILE).readStringOrNull() == completionMarker(normalized)) {
             InstalledCodex(normalized, executable)
         } else null
     }
@@ -122,11 +138,11 @@ internal class CodexRuntimeInstaller(
 
     private fun findRelease(selection: String): Release {
         val endpoint = if (selection == LATEST) releasesApi.resolve("latest")
-        else releasesApi.resolve("tags/rust-v$selection")
+        else releasesApi.resolve("tags/$CODEX_RELEASE_TAG_PREFIX$selection")
         val request = HttpRequest.newBuilder(endpoint)
             .timeout(Duration.ofSeconds(30))
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "Codex-Subscription-JetBrains")
+            .header(USER_AGENT_HEADER, CODEX_USER_AGENT)
             .GET()
             .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
@@ -136,8 +152,8 @@ internal class CodexRuntimeInstaller(
         }
         val json = JsonParser.parseString(response.body()).asJsonObject
         val tag = json.get("tag_name")?.asString.orEmpty()
-        check(tag.startsWith("rust-v")) { "GitHub returned an invalid Codex release tag." }
-        val version = normalizeVersion(tag.removePrefix("rust-v"))
+        check(tag.startsWith(CODEX_RELEASE_TAG_PREFIX)) { "GitHub returned an invalid Codex release tag." }
+        val version = normalizeVersion(tag.removePrefix(CODEX_RELEASE_TAG_PREFIX))
         val asset = json.getAsJsonArray("assets")
             ?.map { it.asJsonObject }
             ?.firstOrNull { it.get("name")?.asString == target.assetName }
@@ -154,7 +170,7 @@ internal class CodexRuntimeInstaller(
     private fun download(release: Release, destination: Path) {
         val request = HttpRequest.newBuilder(release.archive)
             .timeout(Duration.ofMinutes(5))
-            .header("User-Agent", "Codex-Subscription-JetBrains")
+            .header(USER_AGENT_HEADER, CODEX_USER_AGENT)
             .GET()
             .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofInputStream())
@@ -185,7 +201,12 @@ internal class CodexRuntimeInstaller(
                 val type = header[156].toInt().toChar()
                 if (name == target.archiveExecutableName && (type == 0.toChar() || type == '0')) {
                     Files.newOutputStream(destination).use { output -> tar.copyExactly(output, size) }
-                    if (target.requiresExecutablePermission) destination.toFile().setExecutable(true, true)
+                    if (target.requiresExecutablePermission) {
+                        val executable = destination.toFile()
+                        check(executable.setExecutable(true, true) || executable.canExecute()) {
+                            "Could not make the Codex executable runnable."
+                        }
+                    }
                     check(isUsableExecutable(destination)) { "Could not make the Codex executable runnable." }
                     return
                 }
@@ -201,12 +222,11 @@ internal class CodexRuntimeInstaller(
         private const val TAR_BLOCK_SIZE = 512
         private const val MAX_ARCHIVE_BYTES = 500L * 1024 * 1024
         private const val VERSION_MENU_LIMIT = 100
-        private const val VERSION_TAG_PREFIX = "refs/tags/rust-v"
         private val VERSION = Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?")
 
         fun normalizeSelection(value: String): String {
             val selection = value.trim().lowercase()
-            return if (selection.isEmpty() || selection == LATEST) LATEST else normalizeVersion(selection.removePrefix("rust-v").removePrefix("v"))
+            return if (selection.isEmpty() || selection == LATEST) LATEST else normalizeVersion(selection.removePrefix(CODEX_RELEASE_TAG_PREFIX).removePrefix("v"))
         }
 
         internal fun targetFor(osName: String, osArch: String): CodexRuntimeTarget {
@@ -253,7 +273,7 @@ private fun InputStream.readBlock(block: ByteArray): Boolean {
         val count = read(block, offset, block.size - offset)
         if (count < 0) {
             if (offset == 0) return false
-            error("The Codex release archive is truncated.")
+            error(TRUNCATED_ARCHIVE_ERROR)
         }
         offset += count
     }
@@ -265,7 +285,7 @@ private fun InputStream.copyExactly(output: java.io.OutputStream, byteCount: Lon
     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
     while (remaining > 0) {
         val count = read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-        check(count >= 0) { "The Codex release archive is truncated." }
+        check(count >= 0) { TRUNCATED_ARCHIVE_ERROR }
         output.write(buffer, 0, count)
         remaining -= count
     }
@@ -289,6 +309,6 @@ private fun InputStream.skipExactly(byteCount: Long) {
     while (remaining > 0) {
         val skipped = skip(remaining)
         if (skipped > 0) remaining -= skipped
-        else check(read() >= 0) { "The Codex release archive is truncated." }.also { remaining-- }
+        else check(read() >= 0) { TRUNCATED_ARCHIVE_ERROR }.also { remaining-- }
     }
 }

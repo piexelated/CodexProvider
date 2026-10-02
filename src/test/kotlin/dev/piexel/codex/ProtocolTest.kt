@@ -1,9 +1,16 @@
 package dev.piexel.codex
 
+import dev.piexel.codex.install.*
+import dev.piexel.codex.jetbrains.*
+import dev.piexel.codex.protocol.*
+import dev.piexel.codex.runtime.*
+
 import com.google.gson.JsonParser
+import ai.grazie.model.cloud.ContentType
 import com.intellij.ml.llm.core.providers.AiaLlmProviderType
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
@@ -37,6 +44,9 @@ fun main() = runBlocking {
         check(trace == "[Codex Provider] test-event requestId=7 messages=2")
         check(!trace.contains("prompt", ignoreCase = true))
     }
+    verify("diagnostic response logging preserves multiline model text") {
+        check(CodexTrace.escapeLogValue("1. first_name\n2. secondName\t") == "1. first_name\\n2. secondName\\t")
+    }
     verify("account status exposes only the action that fits the session") {
         val signedOut = codexAccountStatus(null)
         check(signedOut.text == "Not signed in")
@@ -44,6 +54,99 @@ fun main() = runBlocking {
         val signedIn = codexAccountStatus(obj("email" to "user@example.invalid", "planType" to "prolite"))
         check(signedIn.text == "user@example.invalid · Pro Lite")
         check(signedIn.action == CodexAccountAction.SIGN_OUT)
+    }
+    verify("debug mode is opt-in and survives settings persistence") {
+        val settings = CodexSettings()
+        check(!settings.debugMode)
+        settings.debugMode = true
+        val restored = CodexSettings()
+        restored.loadState(settings.state)
+        check(restored.debugMode)
+        restored.debugMode = false
+        check(!restored.state.debugMode)
+    }
+    verify("protocol failures retain safe codes and actionable guidance") {
+        val auth = CodexFailure.fromError(obj("code" to -32000, "message" to "private-source", "data" to obj("codexErrorInfo" to "unauthorized")))
+        check(auth.kind == CodexFailureKind.AUTHENTICATION && auth.rpcCode == -32000)
+        val quota = CodexFailure.fromError(obj("codexErrorInfo" to "usageLimitExceeded"))
+        check(quota.kind == CodexFailureKind.QUOTA)
+        val network = CodexFailure.fromError(obj("codexErrorInfo" to obj("httpConnectionFailed" to obj("httpStatusCode" to 502))))
+        check(network.kind == CodexFailureKind.NETWORK && network.httpStatusCode == 502)
+        val rateLimit = CodexFailure.fromError(obj("codexErrorInfo" to obj("httpConnectionFailed" to obj("httpStatusCode" to 429))))
+        check(rateLimit.kind == CodexFailureKind.QUOTA)
+        val model = CodexFailure.fromError(obj("message" to "The private-source model is not supported"))
+        check(model.kind == CodexFailureKind.MODEL)
+        check(CodexFailure.fromError(obj("code" to -32601)).kind == CodexFailureKind.PROTOCOL)
+        check(listOf(auth, quota, network, rateLimit, model).none { it.message.orEmpty().contains("private-source") })
+    }
+    verify("runtime swap drains generation and releases permits after cancellation") {
+        val gate = CodexGenerationGate()
+        val active = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val request = launch(start = CoroutineStart.UNDISPATCHED) {
+            gate.generate { active.complete(Unit); finish.await() }
+        }
+        active.await()
+        val swapping = CompletableDeferred<Unit>()
+        val releaseSwap = CompletableDeferred<Unit>()
+        val swap = launch(start = CoroutineStart.UNDISPATCHED) {
+            gate.pause { swapping.complete(Unit); releaseSwap.await() }
+        }
+        check(!swapping.isCompleted)
+        val nextStarted = CompletableDeferred<Unit>()
+        val next = launch(start = CoroutineStart.UNDISPATCHED) { gate.generate { nextStarted.complete(Unit) } }
+        check(!nextStarted.isCompleted)
+        finish.complete(Unit)
+        swapping.await()
+        check(!nextStarted.isCompleted)
+        releaseSwap.complete(Unit)
+        joinAll(request, swap, next)
+        val held = CompletableDeferred<Unit>()
+        val releaseHeld = CompletableDeferred<Unit>()
+        val blocked = launch(start = CoroutineStart.UNDISPATCHED) {
+            gate.generate { held.complete(Unit); releaseHeld.await() }
+        }
+        held.await()
+        val cancelled = launch(start = CoroutineStart.UNDISPATCHED) { gate.pause { error("Still active") } }
+        cancelled.cancelAndJoin()
+        releaseHeld.complete(Unit)
+        blocked.join()
+        coroutineScope {
+            val both = CompletableDeferred<Unit>()
+            var entered = 0
+            val jobs = List(2) { launch { gate.generate { if (++entered == 2) both.complete(Unit); both.await() } } }
+            jobs.joinAll()
+        }
+    }
+    verify("failed and cancelled runtime replacements preserve the working connection") {
+        val work = Files.createTempDirectory("codex-replacement-test-")
+        val processes = mutableListOf<Process>()
+        val manager = CodexSessionManager(Dispatchers.IO, {}, {}, launchProcess = {
+            val process = ProcessBuilder(
+                Path.of(System.getProperty("java.home"), "bin/java").toString(),
+                "-cp", System.getProperty("java.class.path"), "dev.piexel.codex.FakeServer",
+            ).start()
+            processes.add(process)
+            process to work
+        })
+        try {
+            val original = manager.getOrStart { Path.of("original") }
+            val failed = runCatching { manager.replace(Path.of("invalid")) { error("Invalid catalog") } }
+            check(failed.isFailure)
+            check(manager.isCurrent(original) && original.isAlive && processes.last().waitFor(3, java.util.concurrent.TimeUnit.SECONDS))
+            val cancelled = runCatching {
+                withTimeout(300) { manager.replace(Path.of("cancelled")) { delay(5_000) } }
+            }
+            check(cancelled.exceptionOrNull() is TimeoutCancellationException)
+            check(manager.isCurrent(original) && original.isAlive && processes.last().waitFor(3, java.util.concurrent.TimeUnit.SECONDS))
+            check(original.generate("test-model", listOf(Message("user", "first"))) == "first-result")
+            val replacement = manager.replace(Path.of("replacement")) { it.also { check(it.models().isNotEmpty()) } }
+            check(manager.isCurrent(replacement) && replacement.isAlive && !original.isAlive)
+            check(manager.getOrStart { error("Should reuse replacement") } === replacement)
+        } finally {
+            manager.close()
+            work.toFile().deleteRecursively()
+        }
     }
     verify("feature catalog maps prompt IDs to independent model slots") {
         check(CodexFeatures.forPrompt("ij.refactorings.name-suggestion")?.id == "rename")
@@ -63,6 +166,13 @@ fun main() = runBlocking {
     verify("subscription profiles are not classified as BYOK OpenAI") {
         check(codexProfileProviderType() == AiaLlmProviderType.Unknown)
     }
+    verify("text MIME types are supported without advertising media support") {
+        check(codexSupportsContentType(ContentType("text", "plain")))
+        check(codexSupportsContentType(ContentType("text", "markdown")))
+        check(!codexSupportsContentType(ContentType("image", "png")))
+        check(!codexSupportsContentType(ContentType("audio", "wav")))
+        check(!codexSupportsContentType(ContentType("application", "pdf")))
+    }
     verify("repeated account refreshes do not publish model-setting changes") {
         val catalog = CodexModelCatalog()
         val model = CodexModel("test-model", "Test model")
@@ -74,6 +184,42 @@ fun main() = runBlocking {
         check(!catalog.replace(listOf(helper, model)))
         check(catalog.replace(emptyList()))
         check(!catalog.replace(emptyList()))
+    }
+    verify("model discovery invalidation survives a late IDE subscription") {
+        val settings = CodexSettings()
+        val catalog = CodexModelCatalog()
+        val models = listOf(CodexModel("rename-model", "Rename model"))
+        // The IDE has already observed the initial empty catalog. Startup
+        // finishes before its provider-state listener begins collecting.
+        check(catalog.replace(models))
+        settings.changed()
+        withTimeout(500) { settings.connectionSettingsUpdatedFlow.first() }
+        check(catalog.changes.value == models)
+        // Re-subscribing after provider enablement must also see the change.
+        withTimeout(500) { settings.connectionSettingsUpdatedFlow.first() }
+    }
+    verify("slow IDE listeners do not lose the latest settings invalidation") {
+        val settings = CodexSettings()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var received = 0
+        val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+            settings.connectionSettingsUpdatedFlow.collect {
+                received++
+                if (received == 1) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+            }
+        }
+        try {
+            settings.changed()
+            entered.await()
+            repeat(10) { settings.changed() }
+            release.complete(Unit)
+            yield()
+            check(received == 2)
+        } finally { collector.cancelAndJoin() }
     }
     verify("IDE discovery returns immediately while a single background fetch fills its cache") {
         val catalog = CodexModelCatalog()
@@ -136,6 +282,17 @@ fun main() = runBlocking {
             check(answer == "regionCount")
         }
     }
+    verify("project instructions are enabled and project directory reaches Codex") {
+        check("project_doc_max_bytes=32768" in codexAppServerCommand(Path.of("codex")))
+        fixture { rpc, session ->
+            val project = Files.createTempDirectory("codex-project-test-")
+            try {
+                Files.writeString(project.resolve("AGENTS.md"), "Use project conventions.")
+                session.startThread("test-model", listOf(Message("user", "probe")), project)
+                check(rpc.request("test/threadCwd").text("cwd") == project.toString())
+            } finally { project.toFile().deleteRecursively() }
+        }
+    }
     verify("concurrent requests stay on their own threads") {
         fixture { _, session ->
             coroutineScope {
@@ -172,6 +329,19 @@ fun main() = runBlocking {
             check(failure != null && !failure.message.orEmpty().contains("private-source"))
         }
     }
+    verify("malformed frames fail waiting requests with safe protocol guidance") {
+        fixture { rpc, _ ->
+            val failure = runCatching { rpc.request("test/malformed") }.exceptionOrNull()
+            check(failure is CodexFailure && failure.kind == CodexFailureKind.MALFORMED_PROTOCOL)
+            check(!failure.message.orEmpty().contains("private-source"))
+        }
+    }
+    verify("malformed response bodies do not strand the matching request") {
+        fixture { rpc, _ ->
+            val failure = runCatching { rpc.request("test/malformed-result", timeoutMs = 500) }.exceptionOrNull()
+            check(failure is CodexFailure && failure.kind == CodexFailureKind.MALFORMED_PROTOCOL)
+        }
+    }
     verify("runtime targets cover Linux, macOS, and Windows on x64 and ARM64") {
         fun target(os: String, arch: String, archiveExecutable: String, installedExecutable: String) {
             val target = CodexRuntimeInstaller.targetFor(os, arch)
@@ -203,7 +373,7 @@ fun main() = runBlocking {
         try {
             val base = "http://127.0.0.1:${server.address.port}/"
             server.createContext("/releases/latest") { exchange ->
-                if (releaseRequests.incrementAndGet() > 2) {
+                if (releaseRequests.incrementAndGet() > 3) {
                     exchange.sendResponseHeaders(503, -1)
                     exchange.close()
                     return@createContext
@@ -234,13 +404,18 @@ fun main() = runBlocking {
             val first = installer.install("latest")
             check(first.version == "9.8.7")
             check(first.isLatest)
+            Files.delete(root.resolve(".latest"))
+            check(installer.install("latest", rememberLatest = false).version == "9.8.7")
+            check(!Files.exists(root.resolve(".latest")))
+            installer.rememberLatestVersion("9.8.7")
+            check(Files.readString(root.resolve(".latest")) == "9.8.7")
             check(Files.readString(first.executable).contains("codex-cli 9.8.7"))
             check(installer.latestVersion() == "9.8.7")
             check(!installer.install("9.8.7").isLatest)
             val fallback = installer.install("latest")
             check(fallback.executable == first.executable)
             check(!fallback.isLatest)
-            check(releaseRequests.get() == 3)
+            check(releaseRequests.get() == 4)
             check(downloads.get() == 1)
         } finally {
             server.stop(0)
@@ -255,7 +430,10 @@ fun main() = runBlocking {
         }
     }
     verify("EOF fails waiting calls and closes the process") {
-        fixture { rpc, _ -> check(runCatching { rpc.request("test/exit") }.isFailure) }
+        fixture { rpc, _ ->
+            val failure = runCatching { rpc.request("test/exit") }.exceptionOrNull()
+            check(failure is CodexFailure && failure.kind == CodexFailureKind.PROCESS)
+        }
     }
     println("$passed protocol checks passed. No model inference or browser login was performed.")
 }
@@ -288,6 +466,7 @@ internal object FakeServer {
         var loggedIn = true
         val threads = AtomicInteger()
         val instructions = mutableMapOf<String, String?>()
+        var lastThreadCwd: String? = null
         var interrupts = 0
         fun send(value: Any) { synchronized(System.out) { println(gson.toJson(value)) } }
         System.`in`.bufferedReader().forEachLine { line ->
@@ -321,6 +500,7 @@ internal object FakeServer {
                     check(params.get("ephemeral").asBoolean)
                     check(params.text("modelProvider") == "openai")
                     val threadId = "thread-${threads.incrementAndGet()}"
+                    lastThreadCwd = params.text("cwd")
                     instructions[threadId] = params.text("developerInstructions")
                     result = obj("thread" to obj("id" to threadId))
                 }
@@ -349,7 +529,10 @@ internal object FakeServer {
                 "turn/interrupt" -> interrupts++
                 "thread/unsubscribe" -> Unit
                 "test/interruptCount" -> result = obj("count" to interrupts)
+                "test/threadCwd" -> result = obj("cwd" to lastThreadCwd)
                 "test/error" -> { send(obj("id" to id, "error" to obj("message" to "private-source"))); return@forEachLine }
+                "test/malformed-result" -> { send(obj("id" to id, "result" to "private-source")); return@forEachLine }
+                "test/malformed" -> { println("private-source-invalid-json"); return@forEachLine }
                 "test/exit" -> kotlin.system.exitProcess(0)
                 else -> error("Unexpected method: $method")
             }

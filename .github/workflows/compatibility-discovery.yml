@@ -1,0 +1,108 @@
+name: Discover JetBrains and Codex compatibility
+
+on:
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jetbrains-compatibility-discovery
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.releases.outputs.matrix }}
+      count: ${{ steps.releases.outputs.count }}
+      fingerprint: ${{ steps.releases.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check release discovery logic
+        run: python3 -m unittest discover -s scripts -p 'test_compatibility_releases.py'
+      - name: Find untested released versions
+        id: releases
+        run: |
+          python3 scripts/compatibility-releases.py discover \
+            --manifest docs/compatibility-results.json \
+            --output "$RUNNER_TEMP/compatibility-candidates.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+  test_pairs:
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test ${{ matrix.kind }} compatibility
+        env:
+          IDEA_VERSION: ${{ matrix.idea }}
+          AI_ASSISTANT_VERSION: ${{ matrix.ai }}
+          CODEX_CLI_VERSION: ${{ matrix.cli || '' }}
+          TEST_SUITE_REVISION: ${{ github.sha }}
+          TEST_SUITE_FINGERPRINT: ${{ needs.discover.outputs.fingerprint }}
+        run: |
+          set +e
+          if [[ -n "$CODEX_CLI_VERSION" ]]; then
+            scripts/compatibility-test.sh "$IDEA_VERSION" "$AI_ASSISTANT_VERSION" 21 "$CODEX_CLI_VERSION" > compatibility.log 2>&1
+          else
+            scripts/compatibility-test.sh "$IDEA_VERSION" "$AI_ASSISTANT_VERSION" > compatibility.log 2>&1
+          fi
+          test_status=$?
+          set -e
+          cat compatibility.log
+          python3 scripts/compatibility-releases.py result \
+            --idea "$IDEA_VERSION" --ai "$AI_ASSISTANT_VERSION" \
+            --cli "$CODEX_CLI_VERSION" \
+            --test-suite-revision "$TEST_SUITE_REVISION" \
+            --test-suite-fingerprint "$TEST_SUITE_FINGERPRINT" \
+            --exit-code "$test_status" --log compatibility.log --output result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compatibility-result-${{ matrix.kind }}-${{ matrix.idea }}-${{ matrix.ai }}-${{ matrix.cli || 'none' }}
+          path: |
+            compatibility.log
+            result.json
+          if-no-files-found: error
+
+  update-readme:
+    needs: [discover, test_pairs]
+    if: needs.discover.outputs.count != '0' && needs.test_pairs.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: compatibility-result-*
+          path: ${{ runner.temp }}/compatibility-artifacts
+      - name: Update tested results and README tables
+        run: |
+          python3 scripts/compatibility-releases.py merge \
+            --manifest docs/compatibility-results.json \
+            --readme README.md \
+            --results-dir "$RUNNER_TEMP/compatibility-artifacts" \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - name: Commit tested results to the default branch
+        env:
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git add -- README.md docs/compatibility-results.json
+          if git diff --cached --quiet; then
+            echo "No compatibility results changed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update tested JetBrains compatibility"
+          git push origin "HEAD:$TARGET_BRANCH"

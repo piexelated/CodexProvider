@@ -1,4 +1,6 @@
-package dev.piexel.codex
+package dev.piexel.codex.protocol
+
+import dev.piexel.codex.CodexTrace
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -40,13 +42,14 @@ internal class JsonRpc(private val process: Process) : Closeable {
                         dispatch(JsonParser.parseString(line).asJsonObject)
                     }
                 }
-            } catch (_: Exception) {
-                // Do not log protocol frames: they contain user code and login URLs.
+            } catch (error: Exception) {
+                CodexTrace.warn("rpc-reader-failed", error)
+                close(CodexFailure(CodexFailureKind.MALFORMED_PROTOCOL))
             } finally { close() }
         }
         thread(name = "Codex provider stderr", isDaemon = true) {
             try { process.errorStream.use { input -> input.copyTo(java.io.OutputStream.nullOutputStream()) } }
-            catch (_: Exception) { }
+            catch (_: Exception) { CodexTrace.info("rpc-stderr-reader-terminated") }
         }
     }
 
@@ -66,7 +69,7 @@ internal class JsonRpc(private val process: Process) : Closeable {
                 }
                 try { send(obj("id" to id, "method" to method, "params" to params)) }
                 catch (_: Exception) {
-                    pending.remove(id)?.invoke(Result.failure(IllegalStateException("Codex connection is closed.")))
+                    pending.remove(id)?.invoke(Result.failure(CodexFailure(CodexFailureKind.PROCESS)))
                     requestMetadata.remove(id)
                 }
             }
@@ -96,15 +99,24 @@ internal class JsonRpc(private val process: Process) : Closeable {
             send(obj("id" to message.get("id"), "error" to obj("code" to -32601, "message" to "Client tools are not available in this text provider.")))
         } else if (message.has("id")) {
             val id = message.get("id").asLong
+            if (!pending.containsKey(id)) return
+            // Decode before removing the waiter so a malformed response cannot strand it until timeout.
+            val response = if (message.has("error")) {
+                Result.failure(CodexFailure.fromError(message.getAsJsonObject("error")))
+            } else {
+                Result.success(message.getAsJsonObject("result") ?: obj())
+            }
             val receiver = pending.remove(id) ?: return
             val metadata = requestMetadata.remove(id)
             CodexTrace.info(
                 "rpc-request-finished", "rpcId" to id, "method" to metadata?.first,
-                "success" to !message.has("error"), "durationMs" to metadata?.let { (System.nanoTime() - it.second) / 1_000_000 },
+                "success" to response.isSuccess, "durationMs" to metadata?.let { (System.nanoTime() - it.second) / 1_000_000 },
             )
-            if (message.has("error")) {
-                receiver(Result.failure(IllegalStateException("Codex rejected the request. Check sign-in, model access, and subscription limits.")))
-            } else receiver(Result.success(message.getAsJsonObject("result") ?: obj()))
+            (response.exceptionOrNull() as? CodexFailure)?.let { failure ->
+                CodexTrace.warn("rpc-request-rejected", failure, "kind" to failure.kind, "rpcCode" to failure.rpcCode,
+                    "httpStatusCode" to failure.httpStatusCode)
+            }
+            receiver(response)
         } else {
             val method = message.text("method") ?: return
             if (method in TRACE_NOTIFICATIONS) CodexTrace.info("rpc-notification", "method" to method)
@@ -113,15 +125,16 @@ internal class JsonRpc(private val process: Process) : Closeable {
         }
     }
 
-    override fun close() {
+    override fun close() = close(CodexFailure(CodexFailureKind.PROCESS))
+
+    private fun close(error: CodexFailure) {
         if (!closed.compareAndSet(false, true)) return
         process.destroy()
         if (process.isAlive) process.destroyForcibly()
-        val error = IllegalStateException("Codex stopped. Retry to start a new connection.")
         pending.keys.toList().forEach { pending.remove(it)?.invoke(Result.failure(error)) }
         requestMetadata.clear()
-        CodexTrace.info("rpc-process-closed")
-        listeners.forEach { runCatching { it("connection/closed", obj()) } }
+        CodexTrace.info("rpc-process-closed", "kind" to error.kind)
+        listeners.forEach { runCatching { it("connection/closed", obj("kind" to error.kind.name)) } }
         listeners.clear()
     }
 

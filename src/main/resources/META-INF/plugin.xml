@@ -8,9 +8,9 @@
         No API key or local HTTP proxy is required. The matching native runtime is downloaded from the official Codex releases.
     ]]></description>
     <depends>com.intellij.modules.platform</depends>
-    <depends>com.intellij.ml.llm</depends>
+    <depends config-file="codex-acp.xml">com.intellij.ml.llm</depends>
     <extensions defaultExtensionNs="com.intellij.ml.llm">
-        <thirdPartyAIProvider implementation="dev.piexel.codex.CodexProvider"/>
-        <preferableModelProvider implementation="dev.piexel.codex.CodexFeatureModelPreference"/>
+        <thirdPartyAIProvider implementation="dev.piexel.codex.jetbrains.CodexProvider"/>
+        <preferableModelProvider implementation="dev.piexel.codex.jetbrains.CodexFeatureModelPreference"/>
     </extensions>
 </idea-plugin>

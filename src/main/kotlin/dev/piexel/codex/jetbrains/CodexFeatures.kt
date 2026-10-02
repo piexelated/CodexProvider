@@ -1,4 +1,4 @@
-package dev.piexel.codex
+package dev.piexel.codex.jetbrains
 
 import ai.grazie.model.llm.prompt.LLMPromptID
 import com.intellij.ml.llm.core.models.PreferableModelProvider

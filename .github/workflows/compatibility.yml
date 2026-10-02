@@ -1,0 +1,66 @@
+name: IDE compatibility
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      idea_version:
+        description: IntelliJ IDEA version
+        required: true
+        default: "2026.2.2"
+      ai_assistant_version:
+        description: JetBrains AI Assistant plugin version
+        required: true
+        default: "262.10315.187"
+      jvm_target:
+        description: Java bytecode target (17, 21, or 25)
+        required: true
+        default: "21"
+
+permissions:
+  contents: read
+
+jobs:
+  known-pairs:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - idea: "2025.3.4.1"
+            ai: "253.32098.101"
+          - idea: "2025.3.6.1"
+            ai: "253.33813.55"
+          - idea: "2026.1.5"
+            ai: "261.27258.89"
+          - idea: "2026.2.2"
+            ai: "262.10315.187"
+          - idea: "2026.2.3"
+            ai: "262.10968.147"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test IDEA ${{ matrix.idea }} with AI Assistant ${{ matrix.ai }}
+        env:
+          IDEA_VERSION: ${{ matrix.idea }}
+          AI_ASSISTANT_VERSION: ${{ matrix.ai }}
+        run: |
+          if [[ "$IDEA_VERSION" == "2026.2.2" ]]; then
+            scripts/verify-compatibility-suite.sh "$IDEA_VERSION" "$AI_ASSISTANT_VERSION" 0.157.1
+          else
+            scripts/compatibility-test.sh "$IDEA_VERSION" "$AI_ASSISTANT_VERSION"
+          fi
+
+  requested-pair:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test requested versions
+        env:
+          IDEA_VERSION: ${{ inputs.idea_version }}
+          AI_ASSISTANT_VERSION: ${{ inputs.ai_assistant_version }}
+          JVM_TARGET: ${{ inputs.jvm_target }}
+        run: scripts/compatibility-test.sh "$IDEA_VERSION" "$AI_ASSISTANT_VERSION" "$JVM_TARGET"

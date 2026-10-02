@@ -1,0 +1,12 @@
+FROM eclipse-temurin:25-jdk-jammy
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       fontconfig libfreetype6 libx11-6 libxext6 libxi6 libxrender1 libxtst6 util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /gradle-cache /compat-home \
+    && chmod 777 /gradle-cache /compat-home
+
+ENV GRADLE_USER_HOME=/gradle-cache
+ENV JAVA_TOOL_OPTIONS=-Duser.home=/compat-home
+WORKDIR /workspace

@@ -1,4 +1,6 @@
-package dev.piexel.codex
+package dev.piexel.codex.protocol
+
+import dev.piexel.codex.CodexTrace
 
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
@@ -13,7 +15,17 @@ internal data class CodexModel(val id: String, val name: String)
 internal data class Message(val role: String, val content: String)
 internal data class CodexQuota(val usageAllowed: Boolean, val usedPercent: Int, val resetsAtEpochSeconds: Long?)
 
-internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path) : Closeable {
+internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path) : Closeable by rpc {
+    private data class TurnProgress(
+        var turnId: String? = null,
+        var completed: Boolean = false,
+        var answer: String? = null,
+    )
+
+    private companion object {
+        val TURN_EVENTS = setOf("item/completed", "turn/completed")
+    }
+
     val isAlive get() = rpc.isAlive
 
     suspend fun initialize() {
@@ -76,68 +88,109 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
         return models.distinctBy { it.id }
     }
 
-    suspend fun generate(model: String, messages: List<Message>, timeoutMs: Long = 120_000): String = withTimeout(timeoutMs) {
+    suspend fun generate(model: String, messages: List<Message>, timeoutMs: Long = 120_000, projectDir: Path? = null): String = withTimeout(timeoutMs) {
+        validateMessages(messages)
+        val thread = startThread(model, messages, projectDir)
+        receiveTurn(thread, messages)
+    }
+
+    private suspend fun validateMessages(messages: List<Message>) {
         check(account() != null) { "Sign in with ChatGPT in the Codex provider settings." }
         require(messages.isNotEmpty()) { "No messages were supplied." }
         require(messages.sumOf { it.content.length.toLong() } <= 2 * 1024 * 1024) { "The supplied context is too large." }
-        val transcript = JsonArray()
-        messages.filter { it.role != "system" }.forEach { transcript.add(obj("role" to it.role, "content" to it.content)) }
+    }
+
+    internal suspend fun startThread(model: String, messages: List<Message>, projectDir: Path? = null): String {
         val instructions = messages.filter { it.role == "system" }.joinToString("\n\n") { it.content }
-        val thread = rpc.request("thread/start", obj(
-            "model" to model, "modelProvider" to "openai", "cwd" to workDir.toString(),
+        return rpc.request("thread/start", obj(
+            "model" to model, "modelProvider" to "openai", "cwd" to (projectDir ?: workDir).toString(),
             "approvalPolicy" to "never", "sandbox" to "read-only", "ephemeral" to true,
             "baseInstructions" to "You provide text for an IDE. Follow the supplied task and its exact output format. Return the final answer only. Do not inspect or modify files, use tools, or send progress reports.",
             "developerInstructions" to instructions,
         )).getAsJsonObject("thread").text("id") ?: error("Codex returned no thread ID.")
+    }
+
+    private suspend fun receiveTurn(thread: String, messages: List<Message>): String {
         val events = Channel<Pair<String, JsonObject>>(64)
-        val listener = rpc.subscribe { method, params ->
-            if (method == "connection/closed") events.close(IllegalStateException("Codex connection was lost."))
-            else if (params.text("threadId") == thread && method in setOf("item/completed", "turn/completed")) {
-                if (events.trySend(method to params).isFailure) events.close(IllegalStateException("Too many Codex events."))
-            }
-        }
-        var turnId: String? = null
-        var completed = false
+        val listener = subscribeToTurn(thread, events)
+        val progress = TurnProgress()
         try {
-            val turn = rpc.request("turn/start", obj(
-                "threadId" to thread,
-                "input" to listOf(obj("type" to "text", "text" to "Answer the final user message in this ordered conversation transcript:\n${gson.toJson(transcript)}")),
-            ))
-            turnId = turn.getAsJsonObject("turn").text("id")
-            var answer: String? = null
-            while (true) {
-                val (method, event) = events.receive()
-                if (method == "item/completed") {
-                    val item = event.getAsJsonObject("item")
-                    if (item.text("type") == "agentMessage" && item.text("phase") != "commentary") {
-                        answer = item.text("text")
-                        check((answer?.length ?: 0) <= 4 * 1024 * 1024) { "Codex output is too large." }
-                    }
-                } else {
-                    check(event.getAsJsonObject("turn").text("status") == "completed") {
-                        "Codex did not complete the request. Check your model access and subscription limits."
-                    }
-                    completed = true
-                    return@withTimeout answer?.takeIf { it.isNotEmpty() } ?: error("Codex returned no answer.")
-                }
-            }
-            @Suppress("UNREACHABLE_CODE") error("Unreachable")
+            progress.turnId = startTurn(thread, messages)
+            return awaitTurnCompletion(events, progress)
         } finally {
             listener.close()
             events.close()
             // If turn/start was cancelled before its reply, no turn ID is available
             // to interrupt. Closing the process prevents orphaned inference.
-            if (!completed && turnId == null) rpc.close()
-            withContext(NonCancellable) {
-                runCatching {
-                    withTimeout(2_000) {
-                        if (!completed && turnId != null) rpc.request("turn/interrupt", obj("threadId" to thread, "turnId" to turnId))
-                        rpc.request("thread/unsubscribe", obj("threadId" to thread))
+            if (!progress.completed && progress.turnId == null) rpc.close()
+            cleanupTurn(thread, progress)
+        }
+    }
+
+    private fun subscribeToTurn(thread: String, events: Channel<Pair<String, JsonObject>>): Closeable =
+        rpc.subscribe { method, params ->
+            when {
+                method == "connection/closed" -> events.close(CodexFailure(
+                    runCatching { CodexFailureKind.valueOf(params.text("kind").orEmpty()) }.getOrDefault(CodexFailureKind.PROCESS),
+                ))
+                params.text("threadId") == thread && method in TURN_EVENTS && events.trySend(method to params).isFailure ->
+                    events.close(IllegalStateException("Too many Codex events."))
+            }
+        }
+
+    private suspend fun startTurn(thread: String, messages: List<Message>): String? {
+        val transcript = JsonArray().apply {
+            messages.filter { it.role != "system" }
+                .forEach { add(obj("role" to it.role, "content" to it.content)) }
+        }
+        val response = rpc.request("turn/start", obj(
+            "threadId" to thread,
+            "input" to listOf(obj(
+                "type" to "text",
+                "text" to "Answer the final user message in this ordered conversation transcript:\n${gson.toJson(transcript)}",
+            )),
+        ))
+        return response.getAsJsonObject("turn").text("id")
+    }
+
+    private suspend fun awaitTurnCompletion(
+        events: Channel<Pair<String, JsonObject>>,
+        progress: TurnProgress,
+    ): String {
+        while (true) {
+            val (method, event) = events.receive()
+            when (method) {
+                "item/completed" -> updateAnswer(event, progress)
+                "turn/completed" -> {
+                    val turn = event.getAsJsonObject("turn")
+                    progress.completed = true
+                    if (turn.text("status") != "completed") {
+                        val error = turn.get("error")?.takeIf { it.isJsonObject }?.asJsonObject ?: obj()
+                        throw CodexFailure.fromError(error)
                     }
+                    return progress.answer?.takeIf(String::isNotEmpty) ?: error("Codex returned no answer.")
                 }
             }
         }
     }
 
-    override fun close() = rpc.close()
+    private fun updateAnswer(event: JsonObject, progress: TurnProgress) {
+        val item = event.getAsJsonObject("item")
+        if (item.text("type") != "agentMessage" || item.text("phase") == "commentary") return
+        progress.answer = item.text("text")
+        check((progress.answer?.length ?: 0) <= 4 * 1024 * 1024) { "Codex output is too large." }
+    }
+
+    private suspend fun cleanupTurn(thread: String, progress: TurnProgress) {
+        withContext(NonCancellable) {
+            runCatching {
+                withTimeout(2_000) {
+                    if (!progress.completed) progress.turnId?.let { turnId ->
+                        rpc.request("turn/interrupt", obj("threadId" to thread, "turnId" to turnId))
+                    }
+                    rpc.request("thread/unsubscribe", obj("threadId" to thread))
+                }
+            }
+        }
+    }
 }

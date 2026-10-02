@@ -9,51 +9,17 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Verify on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java 25
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "25"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Check and build plugin
-        run: ./gradlew check buildPlugin --stacktrace
-
-  release:
-    name: Publish GitHub Release
-    needs: verify
+  targets:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java 25
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "25"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
+      - uses: gradle/actions/setup-gradle@v4
       - name: Validate release tag
         shell: bash
         run: |
@@ -81,39 +47,89 @@ jobs:
             exit 1
           fi
 
-      - name: Build release archive
-        run: ./gradlew buildPlugin --stacktrace
-
-      - name: Create checksum
-        shell: bash
+      - name: Select supported IDE branches
+        id: targets
         run: |
-          shopt -s nullglob
-          archives=(build/distributions/CodexProvider-*.zip)
-          if (( ${#archives[@]} != 1 )); then
-            echo "Expected exactly one CodexProvider ZIP, found ${#archives[@]}." >&2
-            exit 1
-          fi
-          archive="${archives[0]}"
-          sha256sum "$archive" > "$archive.sha256"
+          matrix="$(python3 scripts/release-artifacts.py matrix --manifest docs/compatibility-results.json)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  verify:
+    name: Verify on ${{ matrix.os }}
+    needs: targets
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Check pinned platform
+        run: ./gradlew check buildPlugin verifyPluginStructure --stacktrace
+
+  build-pairs:
+    name: Build IDEA ${{ matrix.idea }} / AI ${{ matrix.ai }}
+    needs: targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check release tooling
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Build and test exact version pair
+        env:
+          IDEA_VERSION: ${{ matrix.idea }}
+          AI_ASSISTANT_VERSION: ${{ matrix.ai }}
+          CODEX_COMPATIBILITY_OUTPUT_DIR: ${{ runner.temp }}/tested-plugin
+        run: scripts/compatibility-test.sh "$IDEA_VERSION" "$AI_ASSISTANT_VERSION"
+      - name: Label archive and record verification commit
+        env:
+          IDEA_VERSION: ${{ matrix.idea }}
+          AI_ASSISTANT_VERSION: ${{ matrix.ai }}
+          TEST_SUITE_REVISION: ${{ github.sha }}
+        run: |
+          python3 scripts/release-artifacts.py bundle \
+            --source "$RUNNER_TEMP/tested-plugin" --output release-artifacts \
+            --idea "$IDEA_VERSION" --ai "$AI_ASSISTANT_VERSION" --revision "$TEST_SUITE_REVISION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.idea }}-${{ matrix.ai }}
+          path: release-artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [verify, build-pairs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Generate tested download index
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 scripts/release-artifacts.py notes --artifacts release-artifacts \
+            --repository "$REPOSITORY" --tag "$GITHUB_REF_NAME" --output release-notes.md
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          shopt -s nullglob
-          archives=(build/distributions/CodexProvider-*.zip)
-          if (( ${#archives[@]} != 1 )); then
-            echo "Expected exactly one CodexProvider ZIP, found ${#archives[@]}." >&2
-            exit 1
-          fi
-          archive="${archives[0]}"
-          release_options=(--verify-tag --generate-notes --title "Codex Provider $version")
+          release_options=(--verify-tag --generate-notes --notes-file release-notes.md --title "Codex Provider $version")
           if [[ "$version" == *-dev ]]; then
             release_options+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" \
-            "$archive" \
-            "$archive.sha256" \
-            "${release_options[@]}"
+          gh release create "$GITHUB_REF_NAME" release-artifacts/* "${release_options[@]}"
