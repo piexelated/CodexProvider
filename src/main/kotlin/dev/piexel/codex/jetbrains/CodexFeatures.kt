@@ -6,8 +6,8 @@ import com.intellij.ml.llm.core.models.api.AiaLlmProfileID
 import com.intellij.ml.llm.core.providers.ThirdPartyLLMProfileId
 
 internal enum class CodexFeatureDefault(val label: String) {
-    CORE("Core default"),
-    INSTANT("Instant default"),
+    CORE("Core (default)"),
+    INSTANT("Instant (default)"),
 }
 
 internal data class CodexFeature(

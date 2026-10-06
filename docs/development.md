@@ -24,9 +24,11 @@ Tagging a version runs the pinned cross-platform checks and builds a separate ZI
 
 Use `python3 scripts/release-artifacts.py matrix --manifest docs/compatibility-results.json` to inspect the release targets. Set `CODEX_COMPATIBILITY_OUTPUT_DIR` when running `compatibility-test.sh` to export a successfully tested ZIP before its isolated workspace is removed.
 
-Debug mode in the provider settings enables response-body logging to `idea.log`, including Rename responses. It is persisted and disabled by default. Operational traces remain available without debug mode; error guidance includes fixed recovery instructions while raw server errors, prompts, and sign-in URLs are omitted.
+**Diagnostics → Log model responses to idea.log** in the provider settings enables response-body logging to `idea.log`, including Rename responses. It is persisted and disabled by default. Operational traces remain available without it; error guidance includes fixed recovery instructions while raw server errors, prompts, and sign-in URLs are omitted.
 
-Runtime updates download the selected version while the working session remains available. The swap waits for active text requests, initializes and validates the candidate account and model catalog, then commits the session, selected version, and catalog together. A failed or cancelled replacement closes only the candidate. The previous version stays selected, and **Try again** retries a failed selection. Existing ACP chats reconnect to use a successfully switched executable.
+Account actions and runtime switches in the provider settings take effect immediately. Feature model overrides and response logging are preferences: they follow the settings page's **Apply** and **Cancel**.
+
+Runtime updates download the selected version while the working session remains available. The swap waits for active text requests, initializes and validates the candidate account and model catalog, then commits the session, selected version, and catalog together. A failed or cancelled replacement closes only the candidate. The previous version stays selected, and **Try Again** retries a failed selection. Existing ACP chats reconnect to use a successfully switched executable.
 
 ## Shared runtime for Core and Codex chat
 

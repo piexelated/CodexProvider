@@ -50,10 +50,10 @@ fun main() = runBlocking {
     verify("account status exposes only the action that fits the session") {
         val signedOut = codexAccountStatus(null)
         check(signedOut.text == "Not signed in")
-        check(signedOut.action == CodexAccountAction.SIGN_IN)
+        check(signedOut.action == CodexAccountAction.SIGN_IN && signedOut.tone == CodexStatusTone.NEUTRAL)
         val signedIn = codexAccountStatus(obj("email" to "user@example.invalid", "planType" to "prolite"))
         check(signedIn.text == "user@example.invalid · Pro Lite")
-        check(signedIn.action == CodexAccountAction.SIGN_OUT)
+        check(signedIn.action == CodexAccountAction.SIGN_OUT && signedIn.tone == CodexStatusTone.SUCCESS)
     }
     verify("debug mode is opt-in and survives settings persistence") {
         val settings = CodexSettings()

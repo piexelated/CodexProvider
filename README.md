@@ -22,14 +22,16 @@ The default build targets IDEA 2026.2.2 and AI Assistant `262.10315.187`.
 2. Open **Settings → Plugins → gear → Install Plugin from Disk**, select the ZIP,
    and restart if prompted.
 3. Open **Settings → Tools → AI Assistant → Providers & API keys**, select
-   **Codex Provider**, then **Sign in with ChatGPT**.
+   **Codex Provider**, then **Sign In with ChatGPT**.
 4. Complete browser sign-in, then assign models to **Core** and **Instant**.
+   To use a different model for a single feature, open **Feature Models**.
    Apply the settings and start a conversation in AI Assistant.
 
 ## Diagnostics
 
-Enable **Debug mode** in the Codex provider settings to log model responses to
-`idea.log`. It is off by default and persists until you turn it off. Responses
+Turn on **Diagnostics → Log model responses to idea.log** in the Codex provider
+settings to log model responses. It is off by default and persists until you
+turn it off. Responses
 may contain project code or identifiers; review the log before sharing it.
 Normal operational logs omit response bodies and raw protocol errors.
 

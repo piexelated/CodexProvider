@@ -10,7 +10,6 @@ import dev.piexel.codex.protocol.CodexModel
 import dev.piexel.codex.protocol.CodexQuota
 import dev.piexel.codex.protocol.CodexSession
 import dev.piexel.codex.protocol.Message
-import dev.piexel.codex.protocol.text
 
 import com.google.gson.JsonObject
 import com.intellij.openapi.Disposable
@@ -23,42 +22,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.nio.file.Path
-
-internal enum class CodexRuntimeAction(val label: String) {
-    INSTALL("Install Codex"),
-    UPDATE("Update"),
-    RETRY("Try again"),
-}
-
-internal data class CodexRuntimeStatus(
-    val text: String,
-    val action: CodexRuntimeAction? = null,
-)
-
-internal enum class CodexAccountAction(val label: String) {
-    SIGN_IN("Sign in with ChatGPT"),
-    SIGN_OUT("Sign out"),
-}
-
-internal data class CodexAccountStatus(
-    val text: String,
-    val action: CodexAccountAction,
-)
-
-internal fun codexAccountStatus(account: JsonObject?): CodexAccountStatus = if (account == null) {
-    CodexAccountStatus("Not signed in", CodexAccountAction.SIGN_IN)
-} else {
-    val email = account.text("email")?.takeIf(String::isNotBlank) ?: "ChatGPT account"
-    val plan = account.text("planType")?.takeIf(String::isNotBlank)?.let(::codexPlanLabel) ?: "Subscription"
-    CodexAccountStatus("$email · $plan", CodexAccountAction.SIGN_OUT)
-}
-
-private fun codexPlanLabel(value: String): String = when (value.lowercase()) {
-    "prolite", "pro-lite", "pro_lite" -> "Pro Lite"
-    else -> value.replace('-', ' ').replace('_', ' ').split(' ')
-        .filter(String::isNotBlank)
-        .joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }
-}
 
 @Service(Service.Level.APP)
 internal class CodexRuntime(
@@ -75,7 +38,7 @@ internal class CodexRuntime(
     @Volatile private var pendingSelection: String? = null
     private val mutableStatus = MutableStateFlow(codexAccountStatus(null))
     val status: StateFlow<CodexAccountStatus> = mutableStatus
-    private val mutableRuntimeStatus = MutableStateFlow(CodexRuntimeStatus("Not installed", CodexRuntimeAction.INSTALL))
+    private val mutableRuntimeStatus = MutableStateFlow(CodexRuntimeStatus("Not installed", CodexStatusTone.NEUTRAL, CodexRuntimeAction.INSTALL))
     val runtimeStatus: StateFlow<CodexRuntimeStatus> = mutableRuntimeStatus
 
     init { CodexTrace.info("runtime-service-created", "version" to "1.0") }
@@ -102,13 +65,13 @@ internal class CodexRuntime(
             installed?.let { publishRuntime(it, selection) }
             connection
         }.getOrElse { error ->
-            mutableRuntimeStatus.value = CodexRuntimeStatus(error.message ?: "Could not start Codex", CodexRuntimeAction.RETRY)
+            mutableRuntimeStatus.value = CodexRuntimeStatus("Couldn't start Codex", CodexStatusTone.ERROR, CodexRuntimeAction.RETRY, error.message)
             throw error
         }
     }
 
     private fun busyStatus(installedVerb: String) =
-        CodexRuntimeStatus(if (installedRuntime == null) "Installing Codex…" else "$installedVerb Codex…")
+        CodexRuntimeStatus(if (installedRuntime == null) "Installing Codex…" else "$installedVerb Codex…", CodexStatusTone.BUSY)
 
     private fun publishRuntime(runtime: InstalledCodex, selection: String) {
         installedRuntime = runtime
@@ -127,6 +90,7 @@ internal class CodexRuntime(
             upToDate -> "$version · Up to date"
             else -> "$version installed"
         },
+        CodexStatusTone.SUCCESS,
     )
 
     suspend fun refreshAccount(): Boolean = accountRefresh.withLock {
@@ -170,7 +134,7 @@ internal class CodexRuntime(
 
     suspend fun login(): String {
         val url = session().login()
-        mutableStatus.value = CodexAccountStatus("Complete sign-in in your browser", CodexAccountAction.SIGN_IN)
+        mutableStatus.value = CodexAccountStatus("Waiting for browser sign-in…", CodexStatusTone.BUSY, CodexAccountAction.SIGN_IN)
         return url
     }
 
@@ -198,7 +162,7 @@ internal class CodexRuntime(
             mutableRuntimeStatus.value = if (current == latest) {
                 readyStatus(current, pinned = false, upToDate = true)
             } else {
-                CodexRuntimeStatus("$current installed · $latest available", CodexRuntimeAction.UPDATE)
+                CodexRuntimeStatus("$current installed · $latest available", CodexStatusTone.NEUTRAL, CodexRuntimeAction.UPDATE)
             }
         }
     }
@@ -223,8 +187,10 @@ internal class CodexRuntime(
         } catch (error: Exception) {
             val current = installedRuntime?.version
             mutableRuntimeStatus.value = CodexRuntimeStatus(
-                (error.message ?: "Could not switch Codex") + (current?.let { " · $it remains selected" } ?: ""),
+                current?.let { "Couldn't switch · $it still in use" } ?: "Couldn't install Codex",
+                CodexStatusTone.ERROR,
                 CodexRuntimeAction.RETRY,
+                error.message,
             )
             CodexTrace.warn("runtime-switch-failed", error)
             throw error
