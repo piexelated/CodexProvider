@@ -11,7 +11,6 @@ plugins {
 }
 
 group = "dev.piexel.codex"
-version = "1.0"
 
 val ideaVersion = providers.gradleProperty("ideaVersion").orElse("2026.2.2").get()
 val aiAssistantVersion = providers.gradleProperty("aiAssistantVersion").orElse("262.10315.187").get()

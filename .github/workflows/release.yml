@@ -11,15 +11,11 @@ permissions:
 jobs:
   targets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "25"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate release tag
         shell: bash
         run: |
@@ -39,7 +35,7 @@ jobs:
             printf '%s.%s.%s\n' "$major" "$minor" "${patch:-0}"
           }
 
-          project_version="$(./gradlew properties --console=plain -q | grep '^version:' | cut -d' ' -f2-)"
+          project_version="$(sed -n 's/^version=//p' gradle.properties)"
           tag_numeric_version="$(normalize_numeric_version "${tag_version%-dev}")"
           project_numeric_version="$(normalize_numeric_version "${project_version%-dev}")"
           if [[ "$tag_numeric_version" != "$project_numeric_version" ]]; then
@@ -57,17 +53,18 @@ jobs:
     name: Verify on ${{ matrix.os }}
     needs: targets
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "25"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
       - name: Check pinned platform
         run: ./gradlew check buildPlugin verifyPluginStructure --stacktrace
 
@@ -75,11 +72,12 @@ jobs:
     name: Build IDEA ${{ matrix.idea }} / AI ${{ matrix.ai }}
     needs: targets
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check release tooling
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Build and test exact version pair
@@ -97,7 +95,7 @@ jobs:
           python3 scripts/release-artifacts.py bundle \
             --source "$RUNNER_TEMP/tested-plugin" --output release-artifacts \
             --idea "$IDEA_VERSION" --ai "$AI_ASSISTANT_VERSION" --revision "$TEST_SUITE_REVISION"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.idea }}-${{ matrix.ai }}
           path: release-artifacts/*
@@ -107,11 +105,12 @@ jobs:
     name: Publish GitHub Release
     needs: [verify, build-pairs]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-*
           path: release-artifacts

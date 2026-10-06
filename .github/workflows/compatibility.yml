@@ -3,7 +3,11 @@ name: IDE compatibility
 on:
   push:
     branches: [master]
+    paths-ignore: &docs-only
+      - "**/*.md"
+      - "docs/**"
   pull_request:
+    paths-ignore: *docs-only
   workflow_dispatch:
     inputs:
       idea_version:
@@ -22,10 +26,30 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request supersedes its running checks. Other runs get a unique group,
+# so master pushes are never cancelled or dropped from the queue.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
+  lint:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: gradle/actions/wrapper-validation@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      - name: Check shell scripts
+        run: shellcheck scripts/*.sh
+      - name: Check release and discovery tooling
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
   known-pairs:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # The 2026.2.2 pair runs the suite twice and downloads a real Codex CLI.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +65,7 @@ jobs:
           - idea: "2026.2.3"
             ai: "262.10968.147"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test IDEA ${{ matrix.idea }} with AI Assistant ${{ matrix.ai }}
         env:
           IDEA_VERSION: ${{ matrix.idea }}
@@ -56,8 +80,9 @@ jobs:
   requested-pair:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test requested versions
         env:
           IDEA_VERSION: ${{ inputs.idea_version }}

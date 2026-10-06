@@ -48,32 +48,6 @@ class CompatibilityReleaseTest(unittest.TestCase):
             manifest, releases, lambda _: "262.10968.147", date(2026, 9, 26), limit=8,
         ), [])
 
-    def test_changed_fingerprint_retests_recorded_ide_and_cli(self):
-        manifest = {
-            "discover_releases_after": "2026-09-25",
-            "discover_cli_after": "2026-09-25",
-            "results": [{"idea": "2026.2.3", "ai": "262.10968.147", "test_suite_fingerprint": "a" * 64}],
-            "cli_results": [{"cli": "0.157.1", "test_suite_fingerprint": "a" * 64}],
-        }
-        releases = [{"version": "2026.2.3", "build": "262.10968.63", "date": "2026-09-26"}]
-        cli = [{"tag_name": "rust-v0.157.1", "published_at": "2026-09-26T01:00:00Z"}]
-        today = date(2026, 9, 26)
-        self.assertEqual(compatibility.discover(manifest, releases, lambda _: "262.10968.147", today, 8, "a" * 64), [])
-        self.assertEqual(len(compatibility.discover(manifest, releases, lambda _: "262.10968.147", today, 8, "b" * 64)), 1)
-        self.assertEqual(compatibility.discover_cli(manifest, cli, today, 2, "a" * 64), [])
-        self.assertEqual(len(compatibility.discover_cli(manifest, cli, today, 2, "b" * 64)), 1)
-
-    def test_generated_docs_do_not_change_suite_fingerprint(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "src").mkdir()
-            (root / "src" / "provider.kt").write_text("initial")
-            initial = compatibility.suite_fingerprint(root)
-            (root / "README.md").write_text("generated table")
-            self.assertEqual(compatibility.suite_fingerprint(root), initial)
-            (root / "src" / "provider.kt").write_text("changed")
-            self.assertNotEqual(compatibility.suite_fingerprint(root), initial)
-
     def test_cli_discovery_only_selects_unrecorded_stable_releases(self):
         manifest = {
             "discover_cli_after": "2026-09-25",

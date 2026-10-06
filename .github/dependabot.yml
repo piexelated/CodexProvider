@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Actions are pinned to commit SHAs; Dependabot keeps the SHA and its version comment current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    ignore:
+      # gradle/actions v6 bundles a proprietary caching component under separate terms of use.
+      - dependency-name: gradle/actions*
+        update-types: ["version-update:semver-major"]

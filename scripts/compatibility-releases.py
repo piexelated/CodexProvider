@@ -2,7 +2,6 @@
 """Discover released IDEA/AI pairs and maintain the tested-version table."""
 
 import argparse
-import hashlib
 from datetime import date, datetime, timezone
 from http import HTTPStatus
 import json
@@ -24,19 +23,6 @@ TABLE_END = "<!-- compatibility-table:end -->"
 CLI_TABLE_START = "<!-- codex-cli-table:start -->"
 CLI_TABLE_END = "<!-- codex-cli-table:end -->"
 PLUGIN_VERSION = re.compile(r"/ml-llm-(\d+(?:\.\d+){2,3})\.zip$")
-
-
-def suite_fingerprint(root: Path) -> str:
-    """Exclude generated results/docs so the discovery bot cannot trigger a retest loop."""
-    paths = [root / name for name in ("build.gradle.kts", "settings.gradle.kts", "gradle.properties", ".github/workflows/compatibility.yml")]
-    for directory in ("src", "scripts", "gradle"):
-        paths.extend(path for path in (root / directory).rglob("*")
-                     if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc")
-    digest = hashlib.sha256()
-    for path in sorted(paths):
-        if path.is_file():
-            digest.update(str(path.relative_to(root)).encode() + b"\0" + path.read_bytes() + b"\0")
-    return digest.hexdigest()
 
 
 def version_key(value: str) -> tuple[int, ...]:
@@ -97,9 +83,9 @@ def choose_idea_releases(releases: list[dict], manifest: dict, today: date) -> l
     return sorted(selected.values(), key=lambda release: version_key(release["version"]), reverse=True)
 
 
-def discover(manifest: dict, releases: list[dict], resolve_ai, today: date, limit: int, fingerprint: str | None = None) -> list[dict]:
-    seen = {(result["idea"], result["ai"]) for result in manifest["results"]
-            if fingerprint is None or result.get("test_suite_fingerprint") == fingerprint}
+def discover(manifest: dict, releases: list[dict], resolve_ai, today: date, limit: int) -> list[dict]:
+    """Only unrecorded pairs: compatibility.yml and release.yml re-test supported pairs against new source."""
+    seen = {(result["idea"], result["ai"]) for result in manifest["results"]}
     candidates = []
     for release in choose_idea_releases(releases, manifest, today):
         ai = resolve_ai(release["build"])
@@ -111,9 +97,8 @@ def discover(manifest: dict, releases: list[dict], resolve_ai, today: date, limi
     return candidates[:limit]
 
 
-def discover_cli(manifest: dict, releases: list[dict], today: date, limit: int, fingerprint: str | None = None) -> list[dict]:
-    seen = {result["cli"] for result in manifest.get("cli_results", [])
-            if fingerprint is None or result.get("test_suite_fingerprint") == fingerprint}
+def discover_cli(manifest: dict, releases: list[dict], today: date, limit: int) -> list[dict]:
+    seen = {result["cli"] for result in manifest.get("cli_results", [])}
     scan_after = date.fromisoformat(manifest.get("discover_cli_after", "2026-09-25"))
     versions = []
     for release in releases:
@@ -234,7 +219,6 @@ def main() -> None:
     result_command.add_argument("--ai", required=True)
     result_command.add_argument("--cli", default="")
     result_command.add_argument("--test-suite-revision", required=True)
-    result_command.add_argument("--test-suite-fingerprint")
     result_command.add_argument("--exit-code", type=int, required=True)
     result_command.add_argument("--log", type=Path, required=True)
     result_command.add_argument("--output", type=Path, required=True)
@@ -259,9 +243,8 @@ def main() -> None:
         if not releases:
             raise ValueError("JetBrains returned no IDEA releases")
         today = datetime.now(timezone.utc).date()
-        fingerprint = suite_fingerprint(Path(__file__).resolve().parents[1])
-        idea_candidates = discover(manifest, releases, matching_ai_version, today, args.limit, fingerprint)
-        cli_candidates = discover_cli(manifest, request_json(CODEX_RELEASES), today, limit=2, fingerprint=fingerprint)
+        idea_candidates = discover(manifest, releases, matching_ai_version, today, args.limit)
+        cli_candidates = discover_cli(manifest, request_json(CODEX_RELEASES), today, limit=2)
         candidates = [{"kind": "ide", **candidate} for candidate in idea_candidates] + cli_candidates
         matrix = {"include": candidates}
         write_json(args.output, matrix)
@@ -269,7 +252,6 @@ def main() -> None:
             with args.github_output.open("a", encoding="utf-8") as output:
                 output.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
                 output.write(f"count={len(candidates)}\n")
-                output.write(f"fingerprint={fingerprint}\n")
         for candidate in candidates:
             print(f"DISCOVERED IDEA {candidate['idea']} / AI Assistant {candidate['ai']}" +
                   (f" / Codex CLI {candidate['cli']}" if candidate['kind'] == 'cli' else ""))
@@ -287,10 +269,6 @@ def main() -> None:
             "tested_at": datetime.now(timezone.utc).date().isoformat(),
             "test_suite_revision": args.test_suite_revision,
         }
-        if args.test_suite_fingerprint:
-            if not re.fullmatch(r"[0-9a-f]{64}", args.test_suite_fingerprint):
-                parser.error("--test-suite-fingerprint must be a SHA-256 digest")
-            result["test_suite_fingerprint"] = args.test_suite_fingerprint
         if args.cli:
             if not re.fullmatch(r"\d+\.\d+\.\d+", args.cli):
                 parser.error("--cli must be a stable Codex CLI version")
