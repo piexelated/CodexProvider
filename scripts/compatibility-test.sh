@@ -51,9 +51,7 @@ tar -C "$repo_dir" \
     --exclude='./.kotlin' \
     --exclude='./.intellijPlatform' \
     --exclude='./build' \
-    --exclude='./node_modules' \
     --exclude='./.env' \
-    --exclude='./.bridge' \
     --exclude='./.idea' \
     -cf - . | tar -C "$workspace_dir" -xf -
 if [[ "${CODEX_COMPATIBILITY_SELF_TEST_MISSING_RENAME_RULE:-}" == "1" ]]; then
