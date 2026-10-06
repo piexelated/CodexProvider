@@ -13,7 +13,11 @@ import java.nio.file.Path
 
 internal data class CodexModel(val id: String, val name: String)
 internal data class Message(val role: String, val content: String)
-internal data class CodexQuota(val usageAllowed: Boolean, val usedPercent: Int, val resetsAtEpochSeconds: Long?)
+internal data class CodexQuota(val usageAllowed: Boolean, val usedPercent: Int, val resetsAtEpochSeconds: Long?) {
+    companion object {
+        val SIGNED_OUT = CodexQuota(usageAllowed = false, usedPercent = 100, resetsAtEpochSeconds = null)
+    }
+}
 
 internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path) : Closeable by rpc {
     private data class TurnProgress(
@@ -24,6 +28,12 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
 
     private companion object {
         val TURN_EVENTS = setOf("item/completed", "turn/completed")
+        const val TURN_TIMEOUT_MS = 120_000L
+        const val TURN_CLEANUP_TIMEOUT_MS = 2_000L
+        const val MAX_INPUT_CHARACTERS = 2L * 1024 * 1024
+        const val MAX_ANSWER_CHARACTERS = 4 * 1024 * 1024
+        const val MODEL_PAGE_SIZE = 100
+        const val TURN_EVENT_BUFFER = 64
     }
 
     val isAlive get() = rpc.isAlive
@@ -45,21 +55,17 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
     }
 
     suspend fun account(): JsonObject? = rpc.request("account/read", obj("refreshToken" to false))
-        .get("account")?.takeIf { it.isJsonObject }?.asJsonObject?.takeIf { it.text("type") == "chatgpt" }
+        .objectOrNull("account")?.takeIf { it.text("type") == "chatgpt" }
 
     suspend fun quota(): CodexQuota? {
         val response = rpc.request("account/rateLimits/read", obj("skipRateLimitResetCredits" to true))
-        val allowed = response.get("ordinaryUsageAllowed")
-            ?.takeUnless { it.isJsonNull }
-            ?.asBoolean
-            ?: return null
-        val snapshot = response.get("rateLimits")?.takeIf { it.isJsonObject }?.asJsonObject
-        val window = snapshot?.get("primary")?.takeIf { it.isJsonObject }?.asJsonObject
-            ?: snapshot?.get("secondary")?.takeIf { it.isJsonObject }?.asJsonObject
+        val allowed = response.booleanOrNull("ordinaryUsageAllowed") ?: return null
+        val snapshot = response.objectOrNull("rateLimits")
+        val window = snapshot?.objectOrNull("primary") ?: snapshot?.objectOrNull("secondary")
         return CodexQuota(
             usageAllowed = allowed,
-            usedPercent = window?.get("usedPercent")?.takeUnless { it.isJsonNull }?.asInt ?: if (allowed) 0 else 100,
-            resetsAtEpochSeconds = window?.get("resetsAt")?.takeUnless { it.isJsonNull }?.asLong,
+            usedPercent = window?.intOrNull("usedPercent") ?: if (allowed) 0 else 100,
+            resetsAtEpochSeconds = window?.longOrNull("resetsAt"),
         )
     }
 
@@ -74,10 +80,10 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
         var cursor: String? = null
         val seen = mutableSetOf<String>()
         do {
-            val page = rpc.request("model/list", obj("cursor" to cursor, "limit" to 100, "includeHidden" to false))
+            val page = rpc.request("model/list", obj("cursor" to cursor, "limit" to MODEL_PAGE_SIZE, "includeHidden" to false))
             page.getAsJsonArray("data")?.forEach { entry ->
                 val model = entry.asJsonObject
-                if (model.get("hidden")?.asBoolean != true) {
+                if (model.booleanOrNull("hidden") != true) {
                     val id = model.text("model") ?: model.text("id") ?: return@forEach
                     models.add(CodexModel(id, model.text("displayName") ?: id))
                 }
@@ -88,7 +94,7 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
         return models.distinctBy { it.id }
     }
 
-    suspend fun generate(model: String, messages: List<Message>, timeoutMs: Long = 120_000, projectDir: Path? = null): String = withTimeout(timeoutMs) {
+    suspend fun generate(model: String, messages: List<Message>, timeoutMs: Long = TURN_TIMEOUT_MS, projectDir: Path? = null): String = withTimeout(timeoutMs) {
         validateMessages(messages)
         val thread = startThread(model, messages, projectDir)
         receiveTurn(thread, messages)
@@ -97,7 +103,7 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
     private suspend fun validateMessages(messages: List<Message>) {
         check(account() != null) { "Sign in with ChatGPT in the Codex provider settings." }
         require(messages.isNotEmpty()) { "No messages were supplied." }
-        require(messages.sumOf { it.content.length.toLong() } <= 2 * 1024 * 1024) { "The supplied context is too large." }
+        require(messages.sumOf { it.content.length.toLong() } <= MAX_INPUT_CHARACTERS) { "The supplied context is too large." }
     }
 
     internal suspend fun startThread(model: String, messages: List<Message>, projectDir: Path? = null): String {
@@ -111,7 +117,7 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
     }
 
     private suspend fun receiveTurn(thread: String, messages: List<Message>): String {
-        val events = Channel<Pair<String, JsonObject>>(64)
+        val events = Channel<Pair<String, JsonObject>>(TURN_EVENT_BUFFER)
         val listener = subscribeToTurn(thread, events)
         val progress = TurnProgress()
         try {
@@ -165,7 +171,7 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
                     val turn = event.getAsJsonObject("turn")
                     progress.completed = true
                     if (turn.text("status") != "completed") {
-                        val error = turn.get("error")?.takeIf { it.isJsonObject }?.asJsonObject ?: obj()
+                        val error = turn.objectOrNull("error") ?: obj()
                         throw CodexFailure.fromError(error)
                     }
                     return progress.answer?.takeIf(String::isNotEmpty) ?: error("Codex returned no answer.")
@@ -178,13 +184,13 @@ internal class CodexSession(private val rpc: JsonRpc, private val workDir: Path)
         val item = event.getAsJsonObject("item")
         if (item.text("type") != "agentMessage" || item.text("phase") == "commentary") return
         progress.answer = item.text("text")
-        check((progress.answer?.length ?: 0) <= 4 * 1024 * 1024) { "Codex output is too large." }
+        check((progress.answer?.length ?: 0) <= MAX_ANSWER_CHARACTERS) { "Codex output is too large." }
     }
 
     private suspend fun cleanupTurn(thread: String, progress: TurnProgress) {
         withContext(NonCancellable) {
             runCatching {
-                withTimeout(2_000) {
+                withTimeout(TURN_CLEANUP_TIMEOUT_MS) {
                     if (!progress.completed) progress.turnId?.let { turnId ->
                         rpc.request("turn/interrupt", obj("threadId" to thread, "turnId" to turnId))
                     }

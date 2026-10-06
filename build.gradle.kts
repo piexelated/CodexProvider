@@ -96,18 +96,14 @@ intellijPlatform {
 }
 
 val platformPath = intellijPlatform.platformPath
-fun platformLibrary(vararg candidates: String): File = candidates
-    .asSequence()
-    .map(platformPath::resolve)
-    .map { it.toFile() }
-    .firstOrNull(File::isFile)
-    ?: error("None of the platform library candidates exist: ${candidates.joinToString()}")
-
 fun optionalPlatformLibrary(vararg candidates: String): File? = candidates
     .asSequence()
     .map(platformPath::resolve)
     .map { it.toFile() }
     .firstOrNull(File::isFile)
+
+fun platformLibrary(vararg candidates: String): File = optionalPlatformLibrary(*candidates)
+    ?: error("None of the platform library candidates exist: ${candidates.joinToString()}")
 
 val protocolRuntimeLibraries = listOfNotNull(
     platformLibrary("lib/util-8.jar"),
@@ -139,27 +135,29 @@ val aiAssistantRuntimeLibraries = providers.provider {
     libraries
 }
 
-tasks.register<JavaExec>("protocolTest") {
-    group = "verification"
-    description = "Runs the Codex JSON-RPC protocol verification suite."
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    classpath(files(protocolRuntimeLibraries))
-    classpath(files(aiAssistantRuntimeLibraries))
-    mainClass = "dev.piexel.codex.ProtocolTestKt"
+/** Executable suites that run on the JDK with only the IDE libraries the protocol client needs. */
+fun registerExecutableSuite(name: String, suiteDescription: String, entryPoint: String, configure: JavaExec.() -> Unit = {}) =
+    tasks.register<JavaExec>(name) {
+        group = "verification"
+        description = suiteDescription
+        dependsOn(tasks.testClasses)
+        classpath = sourceSets.test.get().runtimeClasspath
+        classpath(files(protocolRuntimeLibraries))
+        classpath(files(aiAssistantRuntimeLibraries))
+        mainClass = entryPoint
+        systemProperty("codex.trace.disabled", "true")
+        configure()
+    }
+
+registerExecutableSuite("protocolTest", "Runs the Codex JSON-RPC protocol verification suite.", "dev.piexel.codex.ProtocolTestKt") {
     enableAssertions = true
-    systemProperty("codex.trace.disabled", "true")
 }
-tasks.register<JavaExec>("codexCliTest") {
-    group = "verification"
-    description = "Tests a released Codex CLI app-server against the provider's protocol client."
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
-    classpath(files(protocolRuntimeLibraries))
-    classpath(files(aiAssistantRuntimeLibraries))
-    mainClass = "dev.piexel.codex.CodexCliCompatibilityTestKt"
-    args(providers.gradleProperty("codexCliVersion").get())
-    systemProperty("codex.trace.disabled", "true")
+registerExecutableSuite(
+    "codexCliTest", "Tests a released Codex CLI app-server against the provider's protocol client.",
+    "dev.piexel.codex.CodexCliCompatibilityTestKt",
+) {
+    val cliVersion = providers.gradleProperty("codexCliVersion")
+    argumentProviders.add(CommandLineArgumentProvider { listOf(cliVersion.get()) })
 }
 tasks.check { dependsOn("protocolTest") }
 tasks.test {

@@ -43,7 +43,7 @@ class CompatibilitySmokeTest : UsefulTestCase() {
 
 private suspend fun verifyProviderContract() {
     val backend = FixtureBackend()
-    val provider = CodexProvider(backend)
+    val provider = CodexProvider().apply { useBackendForTests(backend) }
     val profileId = ThirdPartyLLMProfileId(CodexProvider.ID, "fixture-model")
     var passed = 0
     suspend fun verify(name: String, test: suspend () -> Unit) {

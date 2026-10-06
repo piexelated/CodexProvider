@@ -23,24 +23,22 @@ internal class CodexFailure(
     companion object {
         fun fromError(error: JsonObject): CodexFailure {
             val code = runCatching { error.get("code")?.asInt }.getOrNull()
-            val data = error.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
-            val info = error.get("codexErrorInfo") ?: data?.get("codexErrorInfo")
+            val info = error.get("codexErrorInfo") ?: error.objectOrNull("data")?.get("codexErrorInfo")
             val tag = when {
                 info?.isJsonPrimitive == true -> info.asString
                 info?.isJsonObject == true -> info.asJsonObject.keySet().singleOrNull()
                 else -> null
             }
-            val details = info?.takeIf { it.isJsonObject }?.asJsonObject?.get(tag)
-                ?.takeIf { it.isJsonObject }?.asJsonObject
-            val http = runCatching { details?.get("httpStatusCode")?.takeUnless { it.isJsonNull }?.asInt }.getOrNull()
+            val details = tag?.let { (info as? JsonObject)?.objectOrNull(it) }
+            val http = runCatching { details?.intOrNull("httpStatusCode") }.getOrNull()
             val kind = when {
-                tag == "unauthorized" || http == 401 -> CodexFailureKind.AUTHENTICATION
-                tag in setOf("usageLimitExceeded", "rateLimitExceeded", "sessionBudgetExceeded") || http == 429 -> CodexFailureKind.QUOTA
+                tag == "unauthorized" || http == HTTP_UNAUTHORIZED -> CodexFailureKind.AUTHENTICATION
+                tag in QUOTA_TAGS || http == HTTP_TOO_MANY_REQUESTS -> CodexFailureKind.QUOTA
                 tag == "contextWindowExceeded" -> CodexFailureKind.CONTEXT
                 // Some runtime versions return model validation only as unstructured text.
                 isUnavailableModel(error) -> CodexFailureKind.MODEL
-                tag in setOf("httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts") -> CodexFailureKind.NETWORK
-                code in setOf(-32700, -32600, -32601, -32602) -> CodexFailureKind.PROTOCOL
+                tag in NETWORK_TAGS -> CodexFailureKind.NETWORK
+                code in JSON_RPC_PROTOCOL_ERRORS -> CodexFailureKind.PROTOCOL
                 else -> CodexFailureKind.REJECTED
             }
             return CodexFailure(kind, code, http)
@@ -48,8 +46,19 @@ internal class CodexFailure(
 
         private fun isUnavailableModel(error: JsonObject): Boolean {
             val message = runCatching { error.text("message")?.lowercase() }.getOrNull() ?: return false
-            return "model" in message && listOf("not found", "does not exist", "not supported", "unsupported", "not available", "do not have access")
-                .any { it in message }
+            return "model" in message && UNAVAILABLE_MODEL_PHRASES.any { it in message }
         }
+
+        private const val HTTP_UNAUTHORIZED = 401
+        private const val HTTP_TOO_MANY_REQUESTS = 429
+        private val QUOTA_TAGS = setOf("usageLimitExceeded", "rateLimitExceeded", "sessionBudgetExceeded")
+        private val NETWORK_TAGS = setOf(
+            "httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts",
+        )
+        /** Parse error, invalid request, method not found, and invalid params. */
+        private val JSON_RPC_PROTOCOL_ERRORS = setOf(-32700, -32600, -32601, -32602)
+        private val UNAVAILABLE_MODEL_PHRASES = listOf(
+            "not found", "does not exist", "not supported", "unsupported", "not available", "do not have access",
+        )
     }
 }

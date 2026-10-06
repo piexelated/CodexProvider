@@ -1,6 +1,7 @@
 package dev.piexel.codex.runtime
 
 import dev.piexel.codex.CodexTrace
+import dev.piexel.codex.runCatchingUnlessCancelled
 import dev.piexel.codex.install.InstalledCodex
 import dev.piexel.codex.install.CodexRuntimeInstaller
 import dev.piexel.codex.jetbrains.CodexSettings
@@ -92,21 +93,22 @@ internal class CodexRuntime(
 
     private suspend fun session(): CodexSession = sessionStartup.withLock {
         var installed: InstalledCodex? = null
-        try {
+        runCatchingUnlessCancelled {
             val selection = CodexSettings.instance.runtimeVersion
             val connection = sessions.getOrStart {
-                mutableRuntimeStatus.value = CodexRuntimeStatus(if (installedRuntime == null) "Installing Codex…" else "Starting Codex…")
-                withContext(ioDispatcher) { installer.install(installedRuntime?.version ?: selection, rememberLatest = false) }.also { installed = it }.executable
+                mutableRuntimeStatus.value = busyStatus(installedVerb = "Starting")
+                withContext(ioDispatcher) { installer.install(installedRuntime?.version ?: selection) }.also { installed = it }.executable
             }
             installed?.let { publishRuntime(it, selection) }
             connection
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
+        }.getOrElse { error ->
             mutableRuntimeStatus.value = CodexRuntimeStatus(error.message ?: "Could not start Codex", CodexRuntimeAction.RETRY)
             throw error
         }
     }
+
+    private fun busyStatus(installedVerb: String) =
+        CodexRuntimeStatus(if (installedRuntime == null) "Installing Codex…" else "$installedVerb Codex…")
 
     private fun publishRuntime(runtime: InstalledCodex, selection: String) {
         installedRuntime = runtime
@@ -114,14 +116,18 @@ internal class CodexRuntime(
             runCatching { installer.rememberLatestVersion(runtime.version) }
                 .onFailure { CodexTrace.warn("runtime-fallback-save-failed", it) }
         }
-        mutableRuntimeStatus.value = CodexRuntimeStatus(
-            when {
-                selection != CodexRuntimeInstaller.LATEST -> "${runtime.version} · Pinned"
-                runtime.isLatest -> "${runtime.version} · Up to date"
-                else -> "${runtime.version} installed"
-            },
+        mutableRuntimeStatus.value = readyStatus(
+            runtime.version, pinned = selection != CodexRuntimeInstaller.LATEST, upToDate = runtime.isLatest,
         )
     }
+
+    private fun readyStatus(version: String, pinned: Boolean, upToDate: Boolean) = CodexRuntimeStatus(
+        when {
+            pinned -> "$version · Pinned"
+            upToDate -> "$version · Up to date"
+            else -> "$version installed"
+        },
+    )
 
     suspend fun refreshAccount(): Boolean = accountRefresh.withLock {
         val started = System.nanoTime()
@@ -135,7 +141,7 @@ internal class CodexRuntime(
             val catalogChanged = publishCatalog(models)
             CodexTrace.info(
                 "account-model-refresh-completed", "signedIn" to (account != null), "models" to models.size,
-                "catalogChanged" to catalogChanged, "durationMs" to (System.nanoTime() - started) / 1_000_000,
+                "catalogChanged" to catalogChanged, "durationMs" to CodexTrace.elapsedMs(started),
             )
             account != null
         } catch (error: CancellationException) {
@@ -151,7 +157,7 @@ internal class CodexRuntime(
         if (account == null) emptyList() else connection.models()
 
     private suspend fun refreshQuotaFor(account: JsonObject?, connection: CodexSession) {
-        if (account == null) publishQuota(CodexQuota(false, 100, null))
+        if (account == null) publishQuota(CodexQuota.SIGNED_OUT)
         else runCatching { refreshQuota(connection) }
             .onFailure { CodexTrace.warn("account-quota-refresh-failed", it) }
     }
@@ -181,18 +187,16 @@ internal class CodexRuntime(
         withContext(ioDispatcher) {
             val current = installedRuntime?.version ?: return@withContext
             if (CodexSettings.instance.runtimeVersion != CodexRuntimeInstaller.LATEST) {
-                mutableRuntimeStatus.value = CodexRuntimeStatus("$current · Pinned")
+                mutableRuntimeStatus.value = readyStatus(current, pinned = true, upToDate = false)
                 return@withContext
             }
-            val latest = try {
-                installer.latestVersion()
-            } catch (error: Exception) {
+            val latest = runCatchingUnlessCancelled { installer.latestVersion() }.getOrElse { error ->
                 CodexTrace.warn("runtime-update-check-failed", error)
-                mutableRuntimeStatus.value = CodexRuntimeStatus("$current installed")
+                mutableRuntimeStatus.value = readyStatus(current, pinned = false, upToDate = false)
                 return@withContext
             }
             mutableRuntimeStatus.value = if (current == latest) {
-                CodexRuntimeStatus("$current · Up to date")
+                readyStatus(current, pinned = false, upToDate = true)
             } else {
                 CodexRuntimeStatus("$current installed · $latest available", CodexRuntimeAction.UPDATE)
             }
@@ -205,11 +209,9 @@ internal class CodexRuntime(
         val normalized = CodexRuntimeInstaller.normalizeSelection(selection)
         val previousStatus = mutableRuntimeStatus.value
         pendingSelection = normalized
-        mutableRuntimeStatus.value = CodexRuntimeStatus(
-            if (installedRuntime == null) "Installing Codex…" else "Preparing Codex…",
-        )
+        mutableRuntimeStatus.value = busyStatus(installedVerb = "Preparing")
         try {
-            val runtime = withContext(ioDispatcher) { installer.install(normalized, rememberLatest = false) }
+            val runtime = withContext(ioDispatcher) { installer.install(normalized) }
             generation.pause {
                 val snapshot = sessions.replace(runtime.executable, ::validateSession)
                 commitRuntime(runtime, normalized, snapshot)
@@ -238,14 +240,9 @@ internal class CodexRuntime(
     private suspend fun validateSession(candidate: CodexSession): AccountSnapshot {
         val account = candidate.account()
         val models = modelsFor(account, candidate)
-        val quota = if (account == null) CodexQuota(false, 100, null) else try {
-            candidate.quota()
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            CodexTrace.warn("account-quota-refresh-failed", error)
-            null
-        }
+        val quota = if (account == null) CodexQuota.SIGNED_OUT else runCatchingUnlessCancelled { candidate.quota() }
+            .onFailure { CodexTrace.warn("account-quota-refresh-failed", it) }
+            .getOrNull()
         return AccountSnapshot(account, models, quota)
     }
 
@@ -263,11 +260,8 @@ internal class CodexRuntime(
         }
     }
 
-    fun models(): List<CodexModel> = catalog.getOrRefresh(scope) {
-        try { refreshAccount() }
-        catch (error: CancellationException) { throw error }
-        catch (_: Exception) { /* refreshAccount exposes the failure in the provider panel. */ }
-    }
+    // refreshAccount exposes its failure in the provider panel.
+    fun models(): List<CodexModel> = catalog.getOrRefresh(scope) { runCatchingUnlessCancelled { refreshAccount() } }
 
     /** ACP chat must resolve the selected runtime before starting its adapter. */
     suspend fun executable(): Path = accountRefresh.withLock {

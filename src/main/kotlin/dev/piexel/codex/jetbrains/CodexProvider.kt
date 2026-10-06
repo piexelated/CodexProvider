@@ -1,6 +1,7 @@
 package dev.piexel.codex.jetbrains
 
 import dev.piexel.codex.CodexTrace
+import dev.piexel.codex.runCatchingUnlessCancelled
 import dev.piexel.codex.protocol.Message
 import dev.piexel.codex.protocol.CodexModel
 import dev.piexel.codex.runtime.CodexRuntime
@@ -12,7 +13,6 @@ import com.intellij.ml.llm.core.providers.*
 import com.intellij.ml.llm.smartChat.endpoints.LlmFunctionDescriptor
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.wm.WindowManager
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -25,7 +25,7 @@ internal interface CodexProviderBackend {
     suspend fun refreshAccount(): Boolean
     fun models(): List<CodexModel>
     suspend fun generate(model: String, messages: List<Message>, projectDir: Path?): String
-    fun settings(): ThirdPartyAISettingsManager
+    fun settings(): CodexSettings
 }
 
 private object LiveCodexBackend : CodexProviderBackend {
@@ -36,10 +36,9 @@ private object LiveCodexBackend : CodexProviderBackend {
     override fun settings() = CodexSettings.instance
 }
 
-class CodexProvider() : ThirdPartyAIProvider {
+class CodexProvider : ThirdPartyAIProvider {
     @Volatile
     private var backend: CodexProviderBackend = LiveCodexBackend
-    internal constructor(backend: CodexProviderBackend) : this() { this.backend = backend }
 
     internal fun useBackendForTests(replacement: CodexProviderBackend): () -> Unit {
         val original = backend
@@ -51,13 +50,12 @@ class CodexProvider() : ThirdPartyAIProvider {
     override val name = "Codex Provider"
     override val isModelsSelectedExplicitly = true
 
-    override suspend fun testConnection(): ThirdPartyAIProvider.ConnectionError? = try {
+    override suspend fun testConnection(): ThirdPartyAIProvider.ConnectionError? = runCatchingUnlessCancelled {
         CodexTrace.info("connection-test-started")
         val signedIn = backend.refreshAccount()
         CodexTrace.info("connection-test-completed", "signedIn" to signedIn)
         if (signedIn) null else ThirdPartyAIProvider.ConnectionError.GenericError("Sign in with ChatGPT to use your Codex provider.")
-    } catch (error: CancellationException) { throw error }
-    catch (error: Exception) {
+    }.getOrElse { error ->
         CodexTrace.warn("connection-test-failed", error)
         ThirdPartyAIProvider.ConnectionError.GenericError(error.message ?: "Cannot start Codex.")
     }
@@ -84,42 +82,29 @@ class CodexProvider() : ThirdPartyAIProvider {
             "functions" to functions.size,
         )
         try {
-        require(profileId.providerId == ID) { "The selected model does not belong to Codex Provider." }
-        require(functions.isEmpty()) { "Tool calling is not supported by the Codex Provider text provider." }
-        val transcript = history.map { message ->
-            require(message is AiaLlmTextMessage && message !is AiaLlmMediaMessage) { "This provider supports text messages only." }
-            val role = when (message) {
-                is AiaLlmSystemMessage -> "system"
-                is AiaLlmUserMessage -> "user"
-                is AiaLlmAssistantMessage -> "assistant"
-                else -> error("Tool messages are not supported by this provider.")
-            }
-            Message(role, message.content)
-        }
-        val answer = backend.generate(profileId.profileId, transcript, activeProjectDirectory())
-        if ((backend.settings() as? CodexSettings)?.debugMode == true) {
+            require(profileId.providerId == ID) { "The selected model does not belong to Codex Provider." }
+            require(functions.isEmpty()) { "Tool calling is not supported by the Codex Provider text provider." }
+            val answer = backend.generate(profileId.profileId, toCodexTranscript(history), activeProjectDirectory())
+            if (backend.settings().debugMode) logResponseBody(requestId, answer)
+            emit(object : AiaLlmStreamText {
+                override val content = answer
+                override val thoughtSignature: String? = null
+            })
+            emit(object : AiaLlmStreamFinishMetaData {})
             CodexTrace.info(
-                "ide-chat-response-body", "requestId" to requestId, "outputCharacters" to answer.length,
-                "response" to CodexTrace.escapeLogValue(answer),
+                "ide-chat-request-completed", "requestId" to requestId, "outputCharacters" to answer.length,
+                "durationMs" to CodexTrace.elapsedMs(started),
             )
-        }
-        emit(object : AiaLlmStreamText {
-            override val content = answer
-            override val thoughtSignature: String? = null
-        })
-        emit(object : AiaLlmStreamFinishMetaData {})
-        CodexTrace.info(
-            "ide-chat-request-completed", "requestId" to requestId, "outputCharacters" to answer.length,
-            "durationMs" to (System.nanoTime() - started) / 1_000_000,
-        )
         } catch (error: Throwable) {
-            CodexTrace.warn(
-                "ide-chat-request-failed", error, "requestId" to requestId,
-                "durationMs" to (System.nanoTime() - started) / 1_000_000,
-            )
+            CodexTrace.warn("ide-chat-request-failed", error, "requestId" to requestId, "durationMs" to CodexTrace.elapsedMs(started))
             throw error
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun logResponseBody(requestId: Long, answer: String) = CodexTrace.info(
+        "ide-chat-response-body", "requestId" to requestId, "outputCharacters" to answer.length,
+        "response" to CodexTrace.escapeLogValue(answer),
+    )
 
     // ThirdPartyAIProvider declares this override as suspending, although it returns a cold Flow.
     @Suppress("kotlin:S6309")
@@ -134,6 +119,17 @@ class CodexProvider() : ThirdPartyAIProvider {
     override fun getSettings(): ThirdPartyAISettingsManager = backend.settings()
 
     companion object { const val ID = "codex-subscription" }
+}
+
+private fun toCodexTranscript(history: List<AiaLlmChatMessage>): List<Message> = history.map { message ->
+    require(message is AiaLlmTextMessage && message !is AiaLlmMediaMessage) { "This provider supports text messages only." }
+    val role = when (message) {
+        is AiaLlmSystemMessage -> "system"
+        is AiaLlmUserMessage -> "user"
+        is AiaLlmAssistantMessage -> "assistant"
+        else -> error("Tool messages are not supported by this provider.")
+    }
+    Message(role, message.content)
 }
 
 private fun activeProjectDirectory(): Path? {

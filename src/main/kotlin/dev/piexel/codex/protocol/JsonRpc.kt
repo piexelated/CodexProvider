@@ -3,12 +3,14 @@ package dev.piexel.codex.protocol
 import dev.piexel.codex.CodexTrace
 
 import com.google.gson.Gson
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import java.io.BufferedReader
 import java.io.Closeable
+import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -20,7 +22,12 @@ import kotlin.time.Duration.Companion.milliseconds
 
 internal val gson = Gson()
 internal fun obj(vararg fields: Pair<String, Any?>): JsonObject = gson.toJsonTree(mapOf(*fields)).asJsonObject
-internal fun JsonObject.text(key: String): String? = get(key)?.takeUnless { it.isJsonNull }?.asString
+internal fun JsonObject.text(key: String): String? = valueOrNull(key)?.asString
+internal fun JsonObject.intOrNull(key: String): Int? = valueOrNull(key)?.asInt
+internal fun JsonObject.longOrNull(key: String): Long? = valueOrNull(key)?.asLong
+internal fun JsonObject.booleanOrNull(key: String): Boolean? = valueOrNull(key)?.asBoolean
+internal fun JsonObject.objectOrNull(key: String): JsonObject? = get(key)?.takeIf { it.isJsonObject }?.asJsonObject
+private fun JsonObject.valueOrNull(key: String): JsonElement? = get(key)?.takeUnless { it.isJsonNull }
 
 /** Codex app-server's documented JSONL protocol. No HTTP or account tokens here. */
 internal class JsonRpc(private val process: Process) : Closeable {
@@ -48,12 +55,12 @@ internal class JsonRpc(private val process: Process) : Closeable {
             } finally { close() }
         }
         thread(name = "Codex provider stderr", isDaemon = true) {
-            try { process.errorStream.use { input -> input.copyTo(java.io.OutputStream.nullOutputStream()) } }
+            try { process.errorStream.use { input -> input.copyTo(OutputStream.nullOutputStream()) } }
             catch (_: Exception) { CodexTrace.info("rpc-stderr-reader-terminated") }
         }
     }
 
-    suspend fun request(method: String, params: JsonObject = obj(), timeoutMs: Long = 30_000): JsonObject =
+    suspend fun request(method: String, params: JsonObject = obj(), timeoutMs: Long = REQUEST_TIMEOUT_MS): JsonObject =
         withTimeout(timeoutMs.milliseconds) {
             suspendCancellableCoroutine { continuation ->
                 val id = sequence.incrementAndGet()
@@ -110,7 +117,7 @@ internal class JsonRpc(private val process: Process) : Closeable {
             val metadata = requestMetadata.remove(id)
             CodexTrace.info(
                 "rpc-request-finished", "rpcId" to id, "method" to metadata?.first,
-                "success" to response.isSuccess, "durationMs" to metadata?.let { (System.nanoTime() - it.second) / 1_000_000 },
+                "success" to response.isSuccess, "durationMs" to metadata?.let { CodexTrace.elapsedMs(it.second) },
             )
             (response.exceptionOrNull() as? CodexFailure)?.let { failure ->
                 CodexTrace.warn("rpc-request-rejected", failure, "kind" to failure.kind, "rpcCode" to failure.rpcCode,
@@ -140,6 +147,7 @@ internal class JsonRpc(private val process: Process) : Closeable {
 
     companion object {
         private const val MAX_FRAME = 8 * 1024 * 1024
+        private const val REQUEST_TIMEOUT_MS = 30_000L
         private val TRACE_NOTIFICATIONS = setOf(
             "account/updated", "account/login/completed", "account/rateLimits/updated", "thread/started", "turn/started",
             "turn/completed", "connection/closed",

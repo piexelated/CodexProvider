@@ -8,8 +8,11 @@ internal object CodexTrace {
     private val enabled = !java.lang.Boolean.getBoolean("codex.trace.disabled")
     private val log by lazy { Logger.getInstance("dev.piexel.codex.subscription") }
     private val sequence = AtomicLong()
+    private const val NANOS_PER_MILLI = 1_000_000L
 
     fun nextRequestId(): Long = sequence.incrementAndGet()
+
+    fun elapsedMs(startedNanos: Long): Long = (System.nanoTime() - startedNanos) / NANOS_PER_MILLI
 
     fun info(event: String, vararg fields: Pair<String, Any?>) {
         if (!enabled) return
