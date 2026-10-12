@@ -3,11 +3,36 @@ package dev.piexel.codex.jetbrains
 import ai.grazie.model.llm.prompt.LLMPromptID
 import com.intellij.ml.llm.core.models.PreferableModelProvider
 import com.intellij.ml.llm.core.models.api.AiaLlmProfileID
+import com.intellij.ml.llm.core.providers.LlmCustomModelsSettingsManager
 import com.intellij.ml.llm.core.providers.ThirdPartyLLMProfileId
+import dev.piexel.codex.protocol.CodexModel
+import kotlinx.coroutines.flow.Flow
 
-internal enum class CodexFeatureDefault(val label: String) {
-    CORE("Core (default)"),
-    INSTANT("Instant (default)"),
+internal enum class CodexFeatureDefault(val title: String) {
+    CORE("Core"),
+    INSTANT("Instant"),
+}
+
+/** Names the model AI Assistant assigns to each default, so settings can show what a feature runs on. */
+internal object AssistantDefaultModels {
+    val changes: Flow<Unit> get() = LlmCustomModelsSettingsManager.getInstance().settingsUpdatedFlow
+
+    fun describe(default: CodexFeatureDefault, codexModels: List<CodexModel>): String {
+        val profile = assignedProfile(default) ?: return default.title
+        val codexName = codexModels.firstOrNull { it.id == assignedCodexModel(default) }?.name
+        return "${default.title} (${codexName ?: profile.profileId})"
+    }
+
+    fun assignedCodexModel(default: CodexFeatureDefault): String? =
+        assignedProfile(default)?.takeIf { it.providerId == CodexProvider.ID }?.profileId
+
+    private fun assignedProfile(default: CodexFeatureDefault): ThirdPartyLLMProfileId? {
+        val assignments = LlmCustomModelsSettingsManager.getInstance()
+        return when (default) {
+            CodexFeatureDefault.CORE -> assignments.smartModelId
+            CodexFeatureDefault.INSTANT -> assignments.quickModelId
+        }
+    }
 }
 
 internal data class CodexFeature(

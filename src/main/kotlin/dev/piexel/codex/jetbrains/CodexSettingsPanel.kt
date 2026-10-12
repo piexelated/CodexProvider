@@ -2,6 +2,7 @@ package dev.piexel.codex.jetbrains
 
 import dev.piexel.codex.CodexTrace
 import dev.piexel.codex.install.CodexRuntimeInstaller
+import dev.piexel.codex.protocol.CodexModel
 import dev.piexel.codex.runCatchingUnlessCancelled
 import dev.piexel.codex.runtime.CodexAccountAction
 import dev.piexel.codex.runtime.CodexAccountStatus
@@ -17,7 +18,12 @@ import com.intellij.ml.llm.core.providers.ThirdPartyAISettingsManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.popup.IconButton
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.AnimatedIcon
+import com.intellij.ui.ColoredListCellRenderer
+import com.intellij.ui.InplaceButton
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.dsl.builder.Panel
@@ -34,12 +40,17 @@ import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JEditorPane
+import javax.swing.JLabel
+import javax.swing.JList
+import javax.swing.SwingUtilities
 
 private const val SIGN_IN_HOST = "auth.openai.com"
+private const val FEATURE_LABEL_WIDTH_GROUP = "codex.featureLabel"
 private const val FEATURE_MODEL_WIDTH_GROUP = "codex.featureModel"
 private const val VERSION_HELP = "Latest updates automatically. Choosing a version switches to it right away."
-private const val FEATURE_MODELS_HELP = "Each feature uses AI Assistant's Core or Instant model unless you choose one here."
-private const val FEATURE_MODELS_SIGNED_OUT = "Sign in to choose a model for each feature."
+private const val FEATURE_MODELS_HELP = "Chat helpers use AI Assistant's Instant model and every other feature uses Core, unless you add an override."
+private const val FEATURE_MODELS_SIGNED_OUT = "Sign in to choose a model for a feature."
+private const val ADD_OVERRIDE = "Add Override…"
 
 /**
  * Account sign-in and runtime switching act immediately because they change live state.
@@ -76,13 +87,11 @@ internal class CodexSettingsPanel(
     }
 
     private fun buildDiagnostics(parentPanel: Panel, settings: CodexSettings): Row =
-        parentPanel.collapsibleGroup("Diagnostics") {
-            row {
-                checkBox("Log model responses to idea.log")
-                    .bindSelected(settings::debugMode)
-                    .comment("Responses can include project code. Turn this on only while diagnosing a problem.")
-            }
-        }.apply { expanded = settings.debugMode }
+        parentPanel.row("Diagnostics:") {
+            checkBox("Log model responses to idea.log")
+                .bindSelected(settings::debugMode)
+                .comment("Responses can include project code. Turn this on only while diagnosing a problem.")
+        }
 
     private fun loadInitialState(runtime: CodexRuntime, tasks: PanelTasks, account: AccountSection) = tasks.launch {
         runCatchingUnlessCancelled {
@@ -129,11 +138,9 @@ private class AccountSection(private val runtime: CodexRuntime, private val task
     private val status = StatusLine()
     private var action = runtime.status.value.action
     private lateinit var actionButton: JButton
-    private lateinit var refreshLink: ActionLink
 
     fun build(panel: Panel): Row = panel.row("Account:") {
         status.attachDetail(cell(status.label).comment("").comment!!)
-        refreshLink = link("Refresh") { refresh() }.component
         actionButton = button(action.label) { performAccountAction() }.component
     }.also { render(runtime.status.value) }
 
@@ -145,24 +152,16 @@ private class AccountSection(private val runtime: CodexRuntime, private val task
         status.show(state.text, state.tone)
         action = state.action
         actionButton.text = state.action.label
-        refreshLink.isVisible = state.action == CodexAccountAction.SIGN_OUT
     }
 
-    private fun refresh() = tasks.perform(
-        busyControls = listOf(actionButton, refreshLink),
-        onFailure = { showFailure("Couldn't refresh your account", it) },
-        // A successful refresh may publish an unchanged status, which the flow does not repeat.
-        onSuccess = { render(runtime.status.value) },
-    ) { runtime.refreshAccount() }
-
     private fun performAccountAction() = when (action) {
-        CodexAccountAction.SIGN_IN -> tasks.perform(listOf(actionButton, refreshLink), onFailure = { showFailure("Couldn't start sign-in", it) }) {
+        CodexAccountAction.SIGN_IN -> tasks.perform(listOf(actionButton), onFailure = { showFailure("Couldn't start sign-in", it) }) {
             val url = runtime.login()
             val uri = URI(url)
             check(uri.scheme == "https" && uri.host == SIGN_IN_HOST) { "Codex returned an unexpected sign-in address." }
             tasks.onEdt { BrowserUtil.browse(url) }
         }
-        CodexAccountAction.SIGN_OUT -> tasks.perform(listOf(actionButton, refreshLink), onFailure = { showFailure("Couldn't sign out", it) }) {
+        CodexAccountAction.SIGN_OUT -> tasks.perform(listOf(actionButton), onFailure = { showFailure("Couldn't sign out", it) }) {
             runtime.logout()
         }
     }
@@ -180,11 +179,12 @@ private class RuntimeSection(
     private val versions = DefaultComboBoxModel<VersionChoice>()
     private val versionSelector = ComboBox(versions).apply { prototypeDisplayValue = VersionChoice("", "0.000.0-alpha.000") }
     private var versionsBeingReplaced = false
-    private val status = StatusLine(fallbackDetail = VERSION_HELP)
+    private val status = StatusLine()
     private lateinit var actionButton: JButton
 
     fun build(panel: Panel): Row = panel.row("Codex runtime:") {
-        status.attachDetail(cell(versionSelector).comment(VERSION_HELP).comment!!)
+        status.attachDetail(cell(versionSelector).comment("").comment!!)
+        contextHelp(VERSION_HELP)
         cell(status.label)
         actionButton = button(CodexRuntimeAction.UPDATE.label) { retryRuntime() }.component
     }.also {
@@ -246,77 +246,152 @@ private class RuntimeSection(
     }
 }
 
+/** Lists only the features with their own model; every other feature keeps AI Assistant's Core or Instant model. */
 private class FeatureModelsSection(
     private val runtime: CodexRuntime,
     private val settings: CodexSettings,
     private val tasks: PanelTasks,
     private val onCatalogChanged: () -> Unit,
 ) {
-    private data class ModelChoice(val id: String?, val label: String) {
+    private data class ModelChoice(val id: String, val label: String) {
         override fun toString() = label
     }
 
-    private val selectors = mutableMapOf<CodexFeature, ComboBox<ModelChoice>>()
-    private lateinit var hint: JEditorPane
-
-    fun build(panel: Panel): Row = panel.collapsibleGroup("Feature Models") {
-        row { hint = comment(FEATURE_MODELS_HELP).component }
-        CodexFeatures.all.forEach { feature -> featureRow(feature) }
-    }.apply {
-        expanded = CodexFeatures.all.any { settings.featureModel(it.id) != null }
-        refreshChoices()
-    }
-
-    fun start() = tasks.render(runtime.modelChanges.filterNotNull()) {
-        refreshChoices()
-        onCatalogChanged()
-    }
-
-    private fun Panel.featureRow(feature: CodexFeature) = row("${feature.label}:") {
+    private class OverrideRow(val feature: CodexFeature) {
         val selector = ComboBox(DefaultComboBoxModel<ModelChoice>())
-        selectors[feature] = selector
-        cell(selector)
-            .widthGroup(FEATURE_MODEL_WIDTH_GROUP)
-            .onReset { selector.selectModel(settings.featureModel(feature.id)) }
-            .onIsModified { selector.selectedModelId() != settings.featureModel(feature.id) }
-            .onApply {
-                val selected = selector.selectedModelId()
-                if (selected != settings.featureModel(feature.id)) settings.setFeatureModel(feature.id, selected)
-            }
-        contextHelp(feature.description)
+        lateinit var row: Row
     }
 
-    /** Keeps each pending, unapplied choice while the available models change. */
-    private fun refreshChoices() {
-        val models = runtime.models()
-        hint.text = if (models.isEmpty()) FEATURE_MODELS_SIGNED_OUT else FEATURE_MODELS_HELP
-        selectors.forEach { (feature, selector) ->
-            val selected = if (selector.itemCount == 0) settings.featureModel(feature.id) else selector.selectedModelId()
-            val model = selector.model as DefaultComboBoxModel<ModelChoice>
-            model.removeAllElements()
-            model.addElement(ModelChoice(null, feature.default.label))
-            models.forEach { model.addElement(ModelChoice(it.id, it.name)) }
-            // An override for a model this account no longer offers stays visible instead of silently resetting.
-            if (selected != null && models.none { it.id == selected }) model.addElement(ModelChoice(selected, "$selected (unavailable)"))
-            selector.selectModel(selected)
-            selector.isEnabled = models.isNotEmpty()
+    private val overrides = CodexFeatures.all.map(::OverrideRow)
+    /** Unapplied overrides by feature ID; they follow the settings page's Apply and Cancel. */
+    private val pending = mutableMapOf<String, String>()
+    private var rendering = false
+    private lateinit var defaults: JLabel
+    private lateinit var addLink: ActionLink
+
+    fun build(panel: Panel): Row = panel.row("Feature models:") {
+        panel {
+            row {
+                defaults = label("").component
+                contextHelp(FEATURE_MODELS_HELP)
+            }
+            overrides.forEach { overrideRow(it) }
+            row { addLink = link(ADD_OVERRIDE) { chooseFeatureToOverride() }.component }
+            onReset { resetPending() }
+            onIsModified { pending != storedOverrides() }
+            onApply { applyPending() }
+        }
+    }.also { resetPending() }
+
+    fun start() {
+        tasks.render(runtime.modelChanges.filterNotNull()) {
+            render()
+            onCatalogChanged()
+        }
+        tasks.render(AssistantDefaultModels.changes) { render() }
+    }
+
+    private fun Panel.overrideRow(override: OverrideRow) {
+        override.row = row {
+            label(override.feature.label)
+                .widthGroup(FEATURE_LABEL_WIDTH_GROUP)
+                .applyToComponent { toolTipText = override.feature.description }
+            cell(override.selector).widthGroup(FEATURE_MODEL_WIDTH_GROUP)
+            cell(InplaceButton(IconButton("Remove override", AllIcons.Actions.Close, AllIcons.Actions.CloseHovered)) {
+                removeOverride(override.feature)
+            })
+        }
+        override.selector.addActionListener {
+            val choice = override.selector.selectedItem as? ModelChoice
+            if (!rendering && choice != null) pending[override.feature.id] = choice.id
         }
     }
 
-    private fun ComboBox<ModelChoice>.selectedModelId(): String? = (selectedItem as? ModelChoice)?.id
+    private fun chooseFeatureToOverride() {
+        val available = CodexFeatures.all.filter { it.id !in pending }
+        JBPopupFactory.getInstance().createPopupChooserBuilder(available)
+            .setRenderer(FeatureChoiceRenderer())
+            .setItemChosenCallback(::addOverride)
+            .createPopup()
+            .showUnderneathOf(addLink)
+    }
 
-    private fun ComboBox<ModelChoice>.selectModel(id: String?) {
-        selectedItem = (0 until itemCount).map(::getItemAt).firstOrNull { it.id == id } ?: getItemAt(0)
+    /** Starts from the model the feature already runs on, then opens the list so the user can pick another. */
+    private fun addOverride(feature: CodexFeature) {
+        val models = runtime.models()
+        val current = models.firstOrNull { it.id == AssistantDefaultModels.assignedCodexModel(feature.default) }
+        pending[feature.id] = (current ?: models.firstOrNull() ?: return).id
+        render()
+        val selector = overrides.first { it.feature == feature }.selector
+        SwingUtilities.invokeLater {
+            selector.requestFocusInWindow()
+            selector.showPopup()
+        }
+    }
+
+    private fun removeOverride(feature: CodexFeature) {
+        pending.remove(feature.id)
+        render()
+    }
+
+    private fun storedOverrides(): Map<String, String> =
+        CodexFeatures.all.mapNotNull { feature -> settings.featureModel(feature.id)?.let { feature.id to it } }.toMap()
+
+    private fun resetPending() {
+        pending.clear()
+        pending.putAll(storedOverrides())
+        render()
+    }
+
+    private fun applyPending() = CodexFeatures.all.forEach { feature ->
+        val chosen = pending[feature.id]
+        if (chosen != settings.featureModel(feature.id)) settings.setFeatureModel(feature.id, chosen)
+    }
+
+    private fun render() {
+        val models = runtime.models()
+        rendering = true
+        try {
+            overrides.forEach { renderOverride(it, models) }
+        } finally {
+            rendering = false
+        }
+        defaults.text = if (models.isEmpty()) FEATURE_MODELS_SIGNED_OUT
+        else "Defaults: " + CodexFeatureDefault.entries.joinToString(" · ") { AssistantDefaultModels.describe(it, models) }
+        addLink.isVisible = models.isNotEmpty() && overrides.any { it.feature.id !in pending }
+    }
+
+    private fun renderOverride(override: OverrideRow, models: List<CodexModel>) {
+        val selected = pending[override.feature.id]
+        override.row.visible(selected != null)
+        if (selected == null) return
+        val choices = override.selector.model as DefaultComboBoxModel<ModelChoice>
+        choices.removeAllElements()
+        models.forEach { choices.addElement(ModelChoice(it.id, it.name)) }
+        // An override for a model this account no longer offers stays visible instead of silently resetting.
+        if (models.none { it.id == selected }) choices.addElement(ModelChoice(selected, "$selected (unavailable)"))
+        choices.selectedItem = (0 until choices.size).map(choices::getElementAt).first { it.id == selected }
+        override.selector.isEnabled = models.isNotEmpty()
+    }
+}
+
+/** Shows each feature with its description, since the override list itself has no room for one. */
+private class FeatureChoiceRenderer : ColoredListCellRenderer<CodexFeature>() {
+    override fun customizeCellRenderer(
+        list: JList<out CodexFeature>, value: CodexFeature, index: Int, selected: Boolean, hasFocus: Boolean,
+    ) {
+        append(value.label)
+        append("  ${value.description}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
     }
 }
 
 /** A short status beside the controls, with an optional explanation in the comment line below them. */
-private class StatusLine(fallbackDetail: String? = null) {
+private class StatusLine {
     val label = JBLabel()
     private var detail: JEditorPane? = null
     private var shownDetail: String? = null
 
-    var fallbackDetail: String? = fallbackDetail
+    var fallbackDetail: String? = null
         set(value) {
             field = value
             renderDetail()
