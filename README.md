@@ -1,49 +1,63 @@
-<h1 align="center">Codex Provider</h1>
+<div align="center">
 
-<p align="center">
-  Use your ChatGPT account in JetBrains AI Assistant.<br>
-  Sign in, choose a Codex model, and keep working in your IDE.
-</p>
+# Codex Provider
 
-Codex Provider connects JetBrains AI Assistant to your ChatGPT account through
-the official Codex runtime. Choose models for chat and supported text actions,
-with optional per-feature overrides. The runtime downloads automatically on
-first use; no Node.js or separate server is needed.
+**Use your ChatGPT account in JetBrains AI Assistant.**<br>
+Sign in, choose a Codex model, and keep working in your IDE.
 
-## Quick start
+[![IDE compatibility](https://github.com/piexelated/CodexProvider/actions/workflows/compatibility.yml/badge.svg)](https://github.com/piexelated/CodexProvider/actions/workflows/compatibility.yml)
+[![Release](https://img.shields.io/github/v/release/piexelated/CodexProvider?include_prereleases&label=release)](https://github.com/piexelated/CodexProvider/releases)
+![IntelliJ IDEA 2025.3+](https://img.shields.io/badge/IntelliJ%20IDEA-2025.3%2B-000000?logo=intellijidea)
+![AI Assistant](https://img.shields.io/badge/JetBrains-AI%20Assistant-7b61ff)
 
-You need IntelliJ IDEA with AI Assistant and a ChatGPT account with Codex access.
-The default build targets IDEA 2026.2.2 and AI Assistant `262.10315.187`.
+</div>
+
+Codex Provider connects JetBrains AI Assistant to your ChatGPT account through the official Codex runtime. Pick models
+for chat and supported text actions, with optional per-feature overrides. The runtime downloads automatically on first
+use; no Node.js or separate server is needed.
+
+## Requirements
+
+- IntelliJ IDEA with the AI Assistant plugin, in one of the [tested pairs](#tested-intellij-idea-versions). The
+  default build targets IDEA 2026.2.2 with AI Assistant `262.10315.187`.
+- A ChatGPT account with Codex access
+
+## Install
 
 1. Download the ZIP for your exact IDE and AI Assistant pair from the
-   [latest release](https://github.com/piexelated/CodexProvider/releases/latest),
-   or [build the plugin](docs/development.md#build-and-verify). Release archives
-   include both versions in their filenames; the release notes list tested pairs.
-2. Open **Settings → Plugins → gear → Install Plugin from Disk**, select the ZIP,
-   and restart if prompted.
-3. Open **Settings → Tools → AI Assistant → Providers & API keys**, select
-   **Codex Provider**, then **Sign In with ChatGPT**.
-4. Complete browser sign-in, then assign models to **Core** and **Instant**.
-   To use a different model for a single feature, open **Feature Models**.
-   Apply the settings and start a conversation in AI Assistant.
+   [latest release](https://github.com/piexelated/CodexProvider/releases/latest), or
+   [build the plugin](docs/development.md#build-and-verify). Each archive name includes both versions; the release
+   notes list the tested pairs.
+2. Open **Settings → Plugins → ⚙ → Install Plugin from Disk**, select the ZIP and restart if prompted.
 
-## Diagnostics
+## Use
 
-Turn on **Diagnostics → Log model responses to idea.log** in the Codex provider
-settings to log model responses. It is off by default and persists until you
-turn it off. Responses
-may contain project code or identifiers; review the log before sharing it.
-Normal operational logs omit response bodies and raw protocol errors.
+Open **Settings → Tools → AI Assistant → Providers & API keys** and select **Codex Provider**.
 
-## Compatibility testing
+1. Click **Sign In with ChatGPT** and finish signing in in the browser.
+2. Assign models to **Core** and **Instant**.
+3. Apply, then start a conversation in AI Assistant.
 
-Run `scripts/compatibility-test.sh 2026.2.2 262.10315.187` to check an exact
-IDE and AI Assistant version pair in Docker. See [development and compatibility
-checks](docs/development.md) for the test coverage and CI matrix.
+| Setting | What it does |
+|---|---|
+| **Core** | default model for chat, code generation, tests, reviews and other features |
+| **Instant** | default model for chat helpers: titles, classification and context summaries |
+| **Feature Models** | override the model for a single feature, such as rename suggestions or merge conflicts |
+| **Diagnostics → Log model responses to idea.log** | log full model responses; off by default |
 
-## Tested IntelliJ IDEA versions
+Response logging stays on until you turn it off. Responses may contain project code or identifiers, so review the log
+before sharing it. Normal logs leave out response bodies and raw protocol errors.
 
-These are historical checks at the listed test commits, not validation of the current source. Each pair builds its own plugin ZIP; other combinations are untested. Release notes list the exact pairs re-tested for that release.
+## Compatibility
+
+Each IDE and AI Assistant pair gets its own plugin ZIP; other combinations are untested. Run
+`scripts/compatibility-test.sh 2026.2.2 262.10315.187` to check a pair yourself in Docker. See
+[development and compatibility checks](docs/development.md) for the test coverage and CI matrix.
+
+### Tested IntelliJ IDEA versions
+
+Historical checks at the listed test commits, not validation of the current source. Release notes list the exact pairs
+re-tested for that release.
 
 <!-- compatibility-table:start -->
 | IntelliJ IDEA | AI Assistant | Verified | Test suite commit |
@@ -56,9 +70,10 @@ These are historical checks at the listed test commits, not validation of the cu
 | 2025.3.4.1 | `253.32098.101` | 2026-09-25 | Unknown |
 <!-- compatibility-table:end -->
 
-## Tested Codex CLI versions
+### Tested Codex CLI versions
 
-These are historical real app-server protocol checks at the listed test commits. The check uses an isolated signed-out profile and performs no model inference.
+Real app-server protocol checks at the listed test commits, using an isolated signed-out profile with no model
+inference.
 
 <!-- codex-cli-table:start -->
 | Codex CLI | IntelliJ IDEA | AI Assistant | Verified | Test suite commit |
