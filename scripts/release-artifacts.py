@@ -2,10 +2,14 @@
 """Choose release targets and label freshly tested plugin archives."""
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
 from urllib.parse import quote
+import zipfile
+
+CONFIG_FILE = re.compile(r'config-file="([^"]+)"')
 
 
 def release_pairs(manifest: dict) -> list[dict]:
@@ -22,11 +26,29 @@ def release_pairs(manifest: dict) -> list[dict]:
     return [branches[branch][1] for branch in sorted(branches, key=int)]
 
 
+def missing_plugin_configs(archive: Path) -> list[str]:
+    """Lists config files the plugin descriptor references but its jar does not contain."""
+    with zipfile.ZipFile(archive) as plugin:
+        for name in plugin.namelist():
+            if not name.endswith(".jar"):
+                continue
+            with zipfile.ZipFile(io.BytesIO(plugin.read(name))) as jar:
+                entries = set(jar.namelist())
+                if "META-INF/plugin.xml" not in entries:
+                    continue
+                descriptor = jar.read("META-INF/plugin.xml").decode("utf-8")
+                return [config for config in CONFIG_FILE.findall(descriptor) if f"META-INF/{config}" not in entries]
+    raise ValueError(f"{archive.name} contains no plugin descriptor")
+
+
 def bundle(source: Path, output: Path, idea: str, ai: str, revision: str) -> Path:
     archives = list(source.glob("*.zip"))
     if len(archives) != 1:
         raise ValueError(f"Expected one freshly tested archive, found {len(archives)}")
     archive = archives[0]
+    missing = missing_plugin_configs(archive)
+    if missing:
+        raise ValueError(f"{archive.name} references missing plugin config files: {', '.join(missing)}")
     output.mkdir(parents=True, exist_ok=True)
     name = f"{archive.stem}-idea-{idea}-ai-{ai}.zip"
     destination = output / name

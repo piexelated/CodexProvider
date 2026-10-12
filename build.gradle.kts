@@ -62,10 +62,13 @@ val hasAcpLauncher = configurations.getByName("intellijPlatformPlugin").files.an
 if (!hasAcpLauncher) {
     kotlin.sourceSets.main { kotlin.exclude("**/CodexAcpProcessLauncher.kt") }
     kotlin.sourceSets.test { kotlin.exclude("**/CodexAcpCompatibilityTest.kt") }
-    tasks.processResources {
-        exclude("META-INF/codex-acp.xml")
-        filesMatching("META-INF/plugin.xml") {
-            filter { it.replace(" config-file=\"codex-acp.xml\"", "") }
+    tasks.processResources { exclude("META-INF/codex-acp.xml") }
+    // patchPluginXml reads the source descriptor, so the reference must be removed from its output.
+    tasks.patchPluginXml {
+        val descriptor = outputFile
+        doLast {
+            val file = descriptor.get().asFile
+            file.writeText(file.readText().replace(" config-file=\"codex-acp.xml\"", ""))
         }
     }
 }

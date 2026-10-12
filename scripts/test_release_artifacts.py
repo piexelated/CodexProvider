@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -8,6 +9,19 @@ import zipfile
 spec = importlib.util.spec_from_file_location("release_artifacts", Path(__file__).with_name("release-artifacts.py"))
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+
+
+def write_plugin(path: Path, descriptor: str, configs: dict[str, str]) -> None:
+    jar = io.BytesIO()
+    with zipfile.ZipFile(jar, "w") as classes:
+        classes.writestr("META-INF/plugin.xml", descriptor)
+        for name, content in configs.items():
+            classes.writestr(f"META-INF/{name}", content)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("CodexProvider/lib/CodexProvider.jar", jar.getvalue())
+
+
+ACP_DESCRIPTOR = '<idea-plugin><depends config-file="codex-acp.xml">com.intellij.ml.llm</depends></idea-plugin>'
 
 
 class ReleaseArtifactsTest(unittest.TestCase):
@@ -31,8 +45,7 @@ class ReleaseArtifactsTest(unittest.TestCase):
             root = Path(temporary)
             source = root / "source"
             source.mkdir()
-            with zipfile.ZipFile(source / "CodexProvider-1.0.zip", "w") as archive:
-                archive.writestr("plugin.txt", "fixture plugin")
+            write_plugin(source / "CodexProvider-1.0.zip", ACP_DESCRIPTOR, {"codex-acp.xml": "<idea-plugin/>"})
             output = root / "release"
             artifact = release.bundle(source, output, "2026.2.2", "262.1.2", "a" * 40)
             self.assertEqual(artifact.read_bytes(), (source / "CodexProvider-1.0.zip").read_bytes())
@@ -44,6 +57,13 @@ class ReleaseArtifactsTest(unittest.TestCase):
             artifact.unlink()
             with self.assertRaises(ValueError):
                 release.release_notes(output, "owner/repo", "v1.0")
+
+    def test_rejects_archive_whose_descriptor_references_a_missing_config(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_plugin(root / "CodexProvider-1.0.zip", ACP_DESCRIPTOR, {})
+            with self.assertRaisesRegex(ValueError, "codex-acp.xml"):
+                release.bundle(root, root / "output", "2025.3.6.1", "253.1.2", "a" * 40)
 
     def test_rejects_missing_or_ambiguous_build_outputs(self):
         with tempfile.TemporaryDirectory() as temporary:
