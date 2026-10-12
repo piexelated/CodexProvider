@@ -26,6 +26,7 @@ import com.intellij.ui.InplaceButton
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.dsl.builder.Cell
 import com.intellij.ui.dsl.builder.Panel
 import com.intellij.ui.dsl.builder.Row
 import com.intellij.ui.dsl.builder.bindSelected
@@ -40,7 +41,6 @@ import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JEditorPane
-import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.SwingUtilities
 
@@ -48,7 +48,10 @@ private const val SIGN_IN_HOST = "auth.openai.com"
 private const val FEATURE_LABEL_WIDTH_GROUP = "codex.featureLabel"
 private const val FEATURE_MODEL_WIDTH_GROUP = "codex.featureModel"
 private const val VERSION_HELP = "Latest updates automatically. Choosing a version switches to it right away."
-private const val FEATURE_MODELS_HELP = "Chat helpers use AI Assistant's Instant model and every other feature uses Core, unless you add an override."
+private const val FEATURE_MODELS_HELP = "An override replaces the Core or Instant model from Model Assignment for one feature."
+private const val DIAGNOSTICS_HELP = "Responses can include project code. Turn this on only while diagnosing a problem."
+// Keeps help text under the controls instead of widening the settings page.
+private const val HELP_LINE_LENGTH = 50
 private const val FEATURE_MODELS_SIGNED_OUT = "Sign in to choose a model for a feature."
 private const val ADD_OVERRIDE = "Add Override…"
 
@@ -73,12 +76,9 @@ internal class CodexSettingsPanel(
         val account = AccountSection(runtime, tasks)
         val runtimeSection = RuntimeSection(runtime, codexSettings, tasks)
         val featureModels = FeatureModelsSection(runtime, codexSettings, tasks) { changeListeners.toList().forEach { it() } }
-        val rows = listOf(
-            account.build(parentPanel),
-            runtimeSection.build(parentPanel),
-            featureModels.build(parentPanel),
-            buildDiagnostics(parentPanel, codexSettings),
-        )
+        val rows = listOf(account.build(parentPanel), runtimeSection.build(parentPanel)) +
+            featureModels.build(parentPanel) +
+            buildDiagnostics(parentPanel, codexSettings)
         account.start()
         runtimeSection.start()
         featureModels.start()
@@ -90,7 +90,7 @@ internal class CodexSettingsPanel(
         parentPanel.row("Diagnostics:") {
             checkBox("Log model responses to idea.log")
                 .bindSelected(settings::debugMode)
-                .comment("Responses can include project code. Turn this on only while diagnosing a problem.")
+                .comment(DIAGNOSTICS_HELP, maxLineLength = HELP_LINE_LENGTH)
         }
 
     private fun loadInitialState(runtime: CodexRuntime, tasks: PanelTasks, account: AccountSection) = tasks.launch {
@@ -266,29 +266,32 @@ private class FeatureModelsSection(
     /** Unapplied overrides by feature ID; they follow the settings page's Apply and Cancel. */
     private val pending = mutableMapOf<String, String>()
     private var rendering = false
-    private lateinit var defaults: JLabel
-    private lateinit var addLink: ActionLink
+    private lateinit var addLink: Cell<ActionLink>
+    private lateinit var signedOutNote: Cell<JEditorPane>
+    private lateinit var overrideList: Panel
 
-    fun build(panel: Panel): Row = panel.row("Feature models:") {
-        panel {
-            row {
-                defaults = label("").component
-                contextHelp(FEATURE_MODELS_HELP)
+    /** The label gets a single-line row so it lines up with the link instead of centering on the whole list. */
+    fun build(panel: Panel): List<Row> {
+        val header = panel.row("Feature models:") {
+            addLink = link(ADD_OVERRIDE) { chooseFeatureToOverride() }
+            signedOutNote = comment(FEATURE_MODELS_SIGNED_OUT)
+            contextHelp(FEATURE_MODELS_HELP)
+        }
+        val list = panel.row("") {
+            overrideList = panel {
+                overrides.forEach { overrideRow(it) }
+                onReset { resetPending() }
+                onIsModified { pending != storedOverrides() }
+                onApply { applyPending() }
             }
-            overrides.forEach { overrideRow(it) }
-            row { addLink = link(ADD_OVERRIDE) { chooseFeatureToOverride() }.component }
-            onReset { resetPending() }
-            onIsModified { pending != storedOverrides() }
-            onApply { applyPending() }
         }
-    }.also { resetPending() }
+        resetPending()
+        return listOf(header, list)
+    }
 
-    fun start() {
-        tasks.render(runtime.modelChanges.filterNotNull()) {
-            render()
-            onCatalogChanged()
-        }
-        tasks.render(AssistantDefaultModels.changes) { render() }
+    fun start() = tasks.render(runtime.modelChanges.filterNotNull()) {
+        render()
+        onCatalogChanged()
     }
 
     private fun Panel.overrideRow(override: OverrideRow) {
@@ -313,7 +316,7 @@ private class FeatureModelsSection(
             .setRenderer(FeatureChoiceRenderer())
             .setItemChosenCallback(::addOverride)
             .createPopup()
-            .showUnderneathOf(addLink)
+            .showUnderneathOf(addLink.component)
     }
 
     /** Starts from the model the feature already runs on, then opens the list so the user can pick another. */
@@ -356,9 +359,9 @@ private class FeatureModelsSection(
         } finally {
             rendering = false
         }
-        defaults.text = if (models.isEmpty()) FEATURE_MODELS_SIGNED_OUT
-        else "Defaults: " + CodexFeatureDefault.entries.joinToString(" · ") { AssistantDefaultModels.describe(it, models) }
-        addLink.isVisible = models.isNotEmpty() && overrides.any { it.feature.id !in pending }
+        signedOutNote.visible(models.isEmpty())
+        addLink.visible(models.isNotEmpty() && overrides.any { it.feature.id !in pending })
+        overrideList.visible(pending.isNotEmpty())
     }
 
     private fun renderOverride(override: OverrideRow, models: List<CodexModel>) {
