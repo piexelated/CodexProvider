@@ -35,14 +35,14 @@ use; no Node.js or separate server is needed.
 Open **Settings → Tools → AI Assistant → Providers & API keys** and select **Codex Provider**.
 
 1. Click **Sign In with ChatGPT** and finish signing in in the browser.
-2. Assign models to **Core** and **Instant**.
+2. Under **Model Assignment**, pick Codex models for **Core features** and **Instant helpers**.
 3. Apply, then start a conversation in AI Assistant.
 
 | Setting | What it does |
 |---|---|
-| **Core** | default model for chat, code generation, tests, reviews and other features |
-| **Instant** | default model for chat helpers: titles, classification and context summaries |
-| **Feature Models** | override the model for a single feature, such as rename suggestions or merge conflicts |
+| **Core features** | default model for chat, code generation, tests, reviews and other features |
+| **Instant helpers** | default model for chat helpers: titles, classification and context summaries |
+| **Feature models → Add Override…** | use a different Codex model for one feature, such as rename suggestions or merge conflicts |
 | **Diagnostics → Log model responses to idea.log** | log full model responses; off by default |
 
 Response logging stays on until you turn it off. Responses may contain project code or identifiers, so review the log
