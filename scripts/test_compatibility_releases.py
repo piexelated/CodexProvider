@@ -100,6 +100,10 @@ class CompatibilityReleaseTest(unittest.TestCase):
         self.assertEqual(compatibility.classify(full_log.replace("PASS Codex CLI", "SKIP Codex CLI"), 0, "0.157.1")[0], "error")
         self.assertEqual(compatibility.classify("> Task :codexCliTest FAILED\nBUILD FAILED", 1, "0.157.1")[0], "failed")
 
+    def test_jvm_notice_interleaved_into_task_header_is_ignored(self):
+        log = "> Task :protocolTestPicked up JAVA_TOOL_OPTIONS: -Duser.home=/compat-home\n\n> Task :test\nBUILD SUCCESSFUL"
+        self.assertEqual(compatibility.classify(log, 0)[0], "passed")
+
     def test_result_records_full_test_suite_revision(self):
         with tempfile.TemporaryDirectory() as temporary:
             log = Path(temporary) / "compatibility.log"

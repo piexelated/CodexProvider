@@ -23,6 +23,8 @@ TABLE_END = "<!-- compatibility-table:end -->"
 CLI_TABLE_START = "<!-- codex-cli-table:start -->"
 CLI_TABLE_END = "<!-- codex-cli-table:end -->"
 PLUGIN_VERSION = re.compile(r"/ml-llm-(\d+(?:\.\d+){2,3})\.zip$")
+# Forked JVMs print this notice on stderr, which can land mid-line in Gradle's stdout.
+JAVA_TOOL_OPTIONS_NOTICE = re.compile(r"Picked up JAVA_TOOL_OPTIONS: [^\n]*\n?")
 
 
 def version_key(value: str) -> tuple[int, ...]:
@@ -192,6 +194,7 @@ def update_readme(readme: Path, manifest: dict) -> None:
 
 
 def classify(log: str, exit_code: int, cli: str = "") -> tuple[str, str]:
+    log = JAVA_TOOL_OPTIONS_NOTICE.sub("", log)
     ran_test = re.search(r"(?m)^> Task :test(?:\s|$)", log) is not None
     ran_protocol = re.search(r"(?m)^> Task :protocolTest(?:\s|$)", log) is not None
     ran_cli = not cli or (re.search(r"(?m)^> Task :codexCliTest(?:\s|$)", log) is not None
