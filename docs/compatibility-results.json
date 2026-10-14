@@ -17,6 +17,26 @@
       "reason": "Full Docker compatibility check passed, including released Codex CLI app-server",
       "status": "passed",
       "tested_at": "2026-09-26"
+    },
+    {
+      "ai": "262.10315.187",
+      "cli": "0.162.0",
+      "idea": "2026.2.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "3981d3cc03bb8c5921ab9a34d8cb7a2284964ed7",
+      "tested_at": "2026-10-14"
+    },
+    {
+      "ai": "262.10315.187",
+      "cli": "0.162.1",
+      "idea": "2026.2.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "3981d3cc03bb8c5921ab9a34d8cb7a2284964ed7",
+      "tested_at": "2026-10-14"
     }
   ],
   "discover_cli_after": "2026-09-25",
@@ -97,6 +117,15 @@
       "tested_at": "2026-09-26"
     },
     {
+      "ai": "261.27258.96",
+      "idea": "2026.1.5",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "3981d3cc03bb8c5921ab9a34d8cb7a2284964ed7",
+      "tested_at": "2026-10-14"
+    },
+    {
       "ai": "262.10315.187",
       "idea": "2026.2.2",
       "reason": "Full Docker compatibility check passed",
@@ -117,6 +146,15 @@
       "reason": "Full Docker compatibility check passed",
       "status": "passed",
       "tested_at": "2026-09-26"
+    },
+    {
+      "ai": "262.10968.223",
+      "idea": "2026.2.3",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "3981d3cc03bb8c5921ab9a34d8cb7a2284964ed7",
+      "tested_at": "2026-10-14"
     }
   ],
   "schema": 2
