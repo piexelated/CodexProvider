@@ -20,6 +20,26 @@
     },
     {
       "ai": "262.10315.187",
+      "cli": "0.160.1",
+      "idea": "2026.2.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "ebfeede78bf32370438d25566007532846b3605a",
+      "tested_at": "2026-10-15"
+    },
+    {
+      "ai": "262.10315.187",
+      "cli": "0.161.0",
+      "idea": "2026.2.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "ebfeede78bf32370438d25566007532846b3605a",
+      "tested_at": "2026-10-15"
+    },
+    {
+      "ai": "262.10315.187",
       "cli": "0.162.0",
       "idea": "2026.2.2",
       "marketplace_compatible": true,
