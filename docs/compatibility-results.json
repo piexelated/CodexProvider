@@ -67,6 +67,16 @@
       "status": "passed",
       "test_suite_revision": "8af23c38d1d8f31e8537412c068156c9cd1e1173",
       "tested_at": "2026-10-16"
+    },
+    {
+      "ai": "262.10315.187",
+      "cli": "0.164.0",
+      "idea": "2026.2.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "e33f04a5af52ad1f06c5c22eb19ea23a78e79fd3",
+      "tested_at": "2026-10-23"
     }
   ],
   "discover_cli_after": "2026-09-25",
@@ -185,6 +195,15 @@
       "status": "passed",
       "test_suite_revision": "3981d3cc03bb8c5921ab9a34d8cb7a2284964ed7",
       "tested_at": "2026-10-14"
+    },
+    {
+      "ai": "262.10968.238",
+      "idea": "2026.2.3",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "e33f04a5af52ad1f06c5c22eb19ea23a78e79fd3",
+      "tested_at": "2026-10-23"
     }
   ],
   "schema": 2
