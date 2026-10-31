@@ -117,6 +117,15 @@
       "tested_at": "2026-09-25"
     },
     {
+      "ai": "252.28539.149",
+      "idea": "2025.2.6.4",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "2fabac1746d98f064b061f30e155323057f04904",
+      "tested_at": "2026-10-31"
+    },
+    {
       "ai": "253.28294.360",
       "idea": "2025.3",
       "reason": "Older AI Assistant provider API; plugin compilation failed",
@@ -162,6 +171,15 @@
       "tested_at": "2026-09-25"
     },
     {
+      "ai": "253.33813.99",
+      "idea": "2025.3.6.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "2fabac1746d98f064b061f30e155323057f04904",
+      "tested_at": "2026-10-31"
+    },
+    {
       "ai": "261.27258.48",
       "idea": "2026.1.5",
       "reason": "Full Docker compatibility check passed",
@@ -184,6 +202,15 @@
       "status": "passed",
       "test_suite_revision": "3981d3cc03bb8c5921ab9a34d8cb7a2284964ed7",
       "tested_at": "2026-10-14"
+    },
+    {
+      "ai": "261.27258.136",
+      "idea": "2026.1.5.1",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "2fabac1746d98f064b061f30e155323057f04904",
+      "tested_at": "2026-10-31"
     },
     {
       "ai": "262.10315.187",
@@ -224,6 +251,15 @@
       "status": "passed",
       "test_suite_revision": "e33f04a5af52ad1f06c5c22eb19ea23a78e79fd3",
       "tested_at": "2026-10-23"
+    },
+    {
+      "ai": "262.11879.100",
+      "idea": "2026.2.4",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "2fabac1746d98f064b061f30e155323057f04904",
+      "tested_at": "2026-10-31"
     }
   ],
   "schema": 2
