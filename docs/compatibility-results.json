@@ -260,6 +260,15 @@
       "status": "failed",
       "test_suite_revision": "2fabac1746d98f064b061f30e155323057f04904",
       "tested_at": "2026-10-31"
+    },
+    {
+      "ai": "262.11879.126",
+      "idea": "2026.2.4",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "bbfc4b4b8d8dd3a5374c2350e3e43fb58f41129c",
+      "tested_at": "2026-11-04"
     }
   ],
   "schema": 2
