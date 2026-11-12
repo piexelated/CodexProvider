@@ -117,6 +117,16 @@
       "status": "passed",
       "test_suite_revision": "b13dcbe2500f320dfd8fadb51f915c6935edf03d",
       "tested_at": "2026-11-11"
+    },
+    {
+      "ai": "262.10315.187",
+      "cli": "0.167.2",
+      "idea": "2026.2.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "9b3c953fe2d94221f67ffa72c7a3d5707e40d799",
+      "tested_at": "2026-11-12"
     }
   ],
   "discover_cli_after": "2026-09-25",
