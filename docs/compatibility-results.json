@@ -321,6 +321,15 @@
       "tested_at": "2026-11-04"
     },
     {
+      "ai": "262.12573.28",
+      "idea": "2026.2.5",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "6e7b19afb29f6278133fb7b9e91ecce3347bed78",
+      "tested_at": "2026-11-14"
+    },
+    {
       "ai": "263.7307.200",
       "idea": "2026.3",
       "marketplace_compatible": true,
