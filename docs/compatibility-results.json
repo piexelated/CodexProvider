@@ -167,6 +167,16 @@
       "status": "passed",
       "test_suite_revision": "888b8d39da41136513f5a034ae0d1d84bdeab0a8",
       "tested_at": "2026-11-18"
+    },
+    {
+      "ai": "262.10315.187",
+      "cli": "0.171.0",
+      "idea": "2026.2.2",
+      "marketplace_compatible": true,
+      "reason": "Gradle task codexCliTest failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "cafa445b85ee20ce149c386b491022f5d519203b",
+      "tested_at": "2026-11-20"
     }
   ],
   "discover_cli_after": "2026-09-25",
@@ -341,6 +351,15 @@
       "tested_at": "2026-11-04"
     },
     {
+      "ai": "262.11879.149",
+      "idea": "2026.2.4",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "cafa445b85ee20ce149c386b491022f5d519203b",
+      "tested_at": "2026-11-20"
+    },
+    {
       "ai": "262.12573.28",
       "idea": "2026.2.5",
       "marketplace_compatible": true,
@@ -350,6 +369,15 @@
       "tested_at": "2026-11-14"
     },
     {
+      "ai": "262.12573.48",
+      "idea": "2026.2.5",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "cafa445b85ee20ce149c386b491022f5d519203b",
+      "tested_at": "2026-11-20"
+    },
+    {
       "ai": "263.7307.200",
       "idea": "2026.3",
       "marketplace_compatible": true,
@@ -357,6 +385,15 @@
       "status": "failed",
       "test_suite_revision": "721839ce870139fe55c2d577c86f7f140c270c71",
       "tested_at": "2026-11-05"
+    },
+    {
+      "ai": "263.7307.328",
+      "idea": "2026.3",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "cafa445b85ee20ce149c386b491022f5d519203b",
+      "tested_at": "2026-11-20"
     }
   ],
   "schema": 2
