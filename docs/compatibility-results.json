@@ -177,6 +177,16 @@
       "status": "failed",
       "test_suite_revision": "cafa445b85ee20ce149c386b491022f5d519203b",
       "tested_at": "2026-11-20"
+    },
+    {
+      "ai": "262.10315.187",
+      "cli": "0.172.0",
+      "idea": "2026.2.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "df6efb246126c9277309648daecf3eaad386422d",
+      "tested_at": "2026-11-25"
     }
   ],
   "discover_cli_after": "2026-09-25",
@@ -204,6 +214,15 @@
       "status": "failed",
       "test_suite_revision": "2fabac1746d98f064b061f30e155323057f04904",
       "tested_at": "2026-10-31"
+    },
+    {
+      "ai": "252.28539.166",
+      "idea": "2025.2.6.5",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "df6efb246126c9277309648daecf3eaad386422d",
+      "tested_at": "2026-11-25"
     },
     {
       "ai": "253.28294.360",
@@ -260,6 +279,15 @@
       "tested_at": "2026-10-31"
     },
     {
+      "ai": "253.33813.120",
+      "idea": "2025.3.6.3",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "df6efb246126c9277309648daecf3eaad386422d",
+      "tested_at": "2026-11-25"
+    },
+    {
       "ai": "261.27258.48",
       "idea": "2026.1.5",
       "reason": "Full Docker compatibility check passed",
@@ -291,6 +319,15 @@
       "status": "passed",
       "test_suite_revision": "2fabac1746d98f064b061f30e155323057f04904",
       "tested_at": "2026-10-31"
+    },
+    {
+      "ai": "261.27258.169",
+      "idea": "2026.1.5.2",
+      "marketplace_compatible": true,
+      "reason": "Full Docker compatibility check passed",
+      "status": "passed",
+      "test_suite_revision": "df6efb246126c9277309648daecf3eaad386422d",
+      "tested_at": "2026-11-25"
     },
     {
       "ai": "262.10315.187",
@@ -378,6 +415,15 @@
       "tested_at": "2026-11-20"
     },
     {
+      "ai": "262.12573.48",
+      "idea": "2026.2.5.1",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "df6efb246126c9277309648daecf3eaad386422d",
+      "tested_at": "2026-11-25"
+    },
+    {
       "ai": "263.7307.200",
       "idea": "2026.3",
       "marketplace_compatible": true,
@@ -394,6 +440,15 @@
       "status": "failed",
       "test_suite_revision": "cafa445b85ee20ce149c386b491022f5d519203b",
       "tested_at": "2026-11-20"
+    },
+    {
+      "ai": "263.7307.353",
+      "idea": "2026.3.0.1",
+      "marketplace_compatible": true,
+      "reason": "Gradle task compileKotlin failed against the selected binaries",
+      "status": "failed",
+      "test_suite_revision": "df6efb246126c9277309648daecf3eaad386422d",
+      "tested_at": "2026-11-25"
     }
   ],
   "schema": 2
